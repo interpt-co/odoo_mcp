@@ -333,6 +333,40 @@ class ConnectionManager:
                 pass
             raise
 
+    # --- Convenience methods (used by workflow toolsets) ---
+
+    async def execute_kw(
+        self,
+        model: str,
+        method: str,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Any:
+        """Convenience wrapper around execute_with_retry for toolset compatibility."""
+        return await self.execute_with_retry(
+            model, method, args or [], kwargs, context
+        )
+
+    async def search_read(
+        self,
+        model: str,
+        domain: list[Any],
+        fields: list[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        order: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Convenience wrapper delegating to the protocol's search_read."""
+        if not self._protocol:
+            raise ConnectionError("Not connected")
+        await self.ensure_healthy()
+        result = await self._protocol.search_read(
+            model, domain, fields, limit, offset, order
+        )
+        self._last_activity = time.monotonic()
+        return result
+
     # --- Connection info (REQ-02-33) ---
 
     def get_connection_info(self) -> dict:

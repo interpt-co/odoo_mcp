@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    pass  # ConnectionManager, McpServer imported by concrete toolsets
+    from odoo_mcp.connection.manager import ConnectionManager
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ class ToolsetMetadata:
     description: str
     """Human-readable description."""
 
-    version: str
+    version: str = "0.1.0"
     """Toolset version (semver)."""
 
     required_modules: list[str] = field(default_factory=list)
@@ -60,7 +60,7 @@ class BaseToolset(ABC):
         ...
 
     @abstractmethod
-    async def register_tools(self, server: Any, connection: Any, **kwargs: Any) -> list[str]:
+    def register_tools(self, server: Any, connection: ConnectionManager, **kwargs: Any) -> list[str]:
         """Register this toolset's tools with the MCP server.
 
         Returns a list of the tool names that were registered (REQ-03-03).

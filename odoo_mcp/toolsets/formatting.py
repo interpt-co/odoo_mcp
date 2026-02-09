@@ -73,6 +73,20 @@ def _normalize_many2one(value: Any) -> Any:
     return value
 
 
+def format_many2one(value: Any) -> dict[str, Any] | None:
+    """Format an Odoo many2one field value to ``{"id": ..., "name": ...}``.
+
+    Handles ``[id, name]`` tuples/lists, ``False``, ``None``, and dict passthrough.
+    """
+    if not value:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return {"id": value[0], "name": value[1]}
+    if isinstance(value, dict):
+        return value
+    return None
+
+
 def _normalize_false(value: Any, field_type: str | None) -> Any:
     """Map Odoo's ``False`` sentinel depending on field type (REQ-04-35)."""
     if value is not False:
@@ -81,6 +95,22 @@ def _normalize_false(value: Any, field_type: str | None) -> Any:
         return ""
     # date, datetime, many2one, binary, etc. → null
     return None
+
+
+# ---------------------------------------------------------------------------
+# Size formatting
+# ---------------------------------------------------------------------------
+
+def format_size_human(size_bytes: int) -> str:
+    """Convert bytes to human-readable size string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 # ---------------------------------------------------------------------------
