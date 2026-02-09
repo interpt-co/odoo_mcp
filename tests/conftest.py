@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from typing import Any
 
 import pytest
+
+# Ensure odoo_mcp package is importable without installing
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from odoo_mcp.config import OdooMcpConfig
 from odoo_mcp.connection.protocol import BaseOdooProtocol, OdooVersion, ConnectionState
