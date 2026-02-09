@@ -1,0 +1,13 @@
+.git
+tests/
+*.pyc
+__pycache__/
+.idea/
+.vscode/
+spec/
+tasks/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
