@@ -20,6 +20,50 @@ from odoo_mcp.connection.protocol import (
 
 logger = logging.getLogger("odoo_mcp.connection.json2")
 
+# ---------------------------------------------------------------------------
+# JSON-2 parameter mapping
+#
+# The JSON-2 API (/json/2/<model>/<method>) passes JSON body keys as **kwargs
+# to the model method.  Record IDs go in the URL path instead of args.
+# This differs from execute_kw which uses positional args + kwargs.
+# ---------------------------------------------------------------------------
+
+# Positional arg name mapping for common methods.
+# Maps method name -> tuple of parameter names for positional args.
+_METHOD_ARG_NAMES: dict[str, tuple[str, ...]] = {
+    "search": ("domain",),
+    "search_read": ("domain",),
+    "search_count": ("domain",),
+    "search_fetch": ("domain", "field_names"),
+    "read_group": ("domain", "fields", "groupby"),
+    "create": ("vals_list",),
+    "name_search": ("name",),
+    "name_create": ("name",),
+    "default_get": ("fields_list",),
+    "onchange": ("values", "field_name", "field_onchange"),
+}
+
+# For recordset methods where IDs are extracted first, remaining arg names.
+_RECORDSET_ARG_NAMES: dict[str, tuple[str, ...]] = {
+    "write": ("vals",),
+}
+
+
+def _is_id_list(value: Any) -> bool:
+    """Check if a value looks like a list of record IDs."""
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) > 0
+        and all(isinstance(i, int) for i in value)
+    )
+
+
+def _is_recordset_method(method: str) -> bool:
+    """Check if a method operates on specific records (IDs as first arg)."""
+    return method.startswith(("action_", "button_", "message_")) or method in {
+        "read", "write", "unlink", "copy", "name_get",
+    }
+
 
 class Json2Adapter(BaseOdooProtocol):
     """JSON-2 protocol adapter for Odoo 19+ (REQ-02b-09)."""
@@ -88,19 +132,49 @@ class Json2Adapter(BaseOdooProtocol):
         kwargs: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> Any:
-        """REQ-02b-09b: Execute via /json/2/{model}/{method}."""
-        merged_kwargs: dict[str, Any] = dict(kwargs or {})
-        if context:
-            merged_kwargs["context"] = {**self._base_context, **context}
-        elif self._base_context:
-            merged_kwargs["context"] = dict(self._base_context)
+        """REQ-02b-09b: Execute via /json/2/{model}/{method}.
 
-        # JSON-2 uses named parameters
-        params: dict[str, Any] = {"args": list(args)}
-        params.update(merged_kwargs)
+        Translates the execute_kw calling convention (positional args + kwargs)
+        into JSON-2's named-parameter convention with IDs in the URL path.
+        """
+        params: dict[str, Any] = dict(kwargs or {})
+        if context:
+            params["context"] = {**self._base_context, **context}
+        elif self._base_context:
+            params["context"] = dict(self._base_context)
+
+        # Convert positional args to named parameters for JSON-2
+        remaining_args = list(args)
+        ids_for_url: list[int] | None = None
+
+        if method in _METHOD_ARG_NAMES:
+            # Known method with named positional params (search_read, create, etc.)
+            for i, name in enumerate(_METHOD_ARG_NAMES[method]):
+                if i < len(remaining_args):
+                    params[name] = remaining_args[i]
+        elif _is_recordset_method(method) and remaining_args and _is_id_list(remaining_args[0]):
+            # Recordset method: first arg is IDs → put in URL
+            ids_for_url = remaining_args.pop(0)
+            # Map remaining positional args if known
+            for i, name in enumerate(_RECORDSET_ARG_NAMES.get(method, ())):
+                if i < len(remaining_args):
+                    params[name] = remaining_args[i]
+        elif remaining_args and _is_id_list(remaining_args[0]):
+            # Unknown method with what looks like IDs — assume recordset
+            ids_for_url = remaining_args.pop(0)
+            logger.debug(
+                "Unknown method %s.%s: assuming IDs %s in URL",
+                model, method, ids_for_url,
+            )
+
+        # Build endpoint
+        if ids_for_url:
+            ids_str = ",".join(str(i) for i in ids_for_url)
+            endpoint = f"/json/2/{model}/{ids_str}/{method}"
+        else:
+            endpoint = f"/json/2/{model}/{method}"
 
         try:
-            endpoint = f"/json/2/{model}/{method}"
             response = await self._client.post(endpoint, json=params)
 
             if response.status_code == 401:
@@ -120,12 +194,35 @@ class Json2Adapter(BaseOdooProtocol):
 
             data = response.json()
 
-            if "error" in data:
+            if isinstance(data, dict) and "error" in data:
                 raise OdooRpcError.from_json2_error(
                     data["error"], model=model, method=method
                 )
 
-            return data.get("result")
+            # JSON-2 returns the result directly (no "result" wrapper for lists)
+            if isinstance(data, (list, int, bool, float)):
+                return data
+            if isinstance(data, dict):
+                result = data.get("result", data)
+                # Detect Odoo error dicts returned inside "result" wrapper
+                # (e.g. SaaS controllers may wrap exceptions this way)
+                if (
+                    isinstance(result, dict)
+                    and "name" in result
+                    and "message" in result
+                    and result.get("name", "").endswith(
+                        ("Error", "Warning", "Exception")
+                    )
+                ):
+                    raise OdooRpcError(
+                        message=result["message"],
+                        error_class=result.get("name"),
+                        traceback=result.get("debug"),
+                        model=model,
+                        method=method,
+                    )
+                return result
+            return data
 
         except (AuthenticationError, AccessDeniedError, OdooRpcError):
             raise

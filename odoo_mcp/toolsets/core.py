@@ -357,10 +357,20 @@ class CoreToolset(BaseToolset):
             if context:
                 kwargs["context"] = context
 
-            result = await connection.execute_kw(
-                model, "search_read", [domain], kwargs,
-            )
-            records = result if result else []
+            try:
+                result = await connection.execute_kw(
+                    model, "search_read", [domain], kwargs,
+                )
+            except Exception as exc:
+                return _error_response(
+                    "rpc", "RPC_ERROR", str(exc),
+                    original_error=str(exc),
+                )
+
+            # Coerce result to list — JSON-2 may return a dict wrapper
+            if isinstance(result, dict):
+                result = result.get("records", result.get("result", []))
+            records = result if isinstance(result, list) else []
 
             # Normalise (REQ-04-05)
             records = normalize_records(records)
@@ -701,16 +711,22 @@ class CoreToolset(BaseToolset):
             fields: list[str] | None = None,
             exhaustive: bool = False,
         ) -> str:
-            engine = ProgressiveSearch(connection, config)
-            result = await engine.search(
-                query=query,
-                model=model,
-                max_depth=max_depth,
-                limit=limit,
-                fields=fields,
-                exhaustive=exhaustive,
-            )
-            return json.dumps(result)
+            try:
+                engine = ProgressiveSearch(connection, config)
+                result = await engine.search(
+                    query=query,
+                    model=model,
+                    max_depth=max_depth,
+                    limit=limit,
+                    fields=fields,
+                    exhaustive=exhaustive,
+                )
+                return json.dumps(result, default=str)
+            except Exception as exc:
+                return _error_response(
+                    "search", "SEARCH_ERROR", str(exc),
+                    original_error=str(exc),
+                )
 
         return handler
 
@@ -789,6 +805,18 @@ class CoreToolset(BaseToolset):
                     str(exc),
                     suggestion="Use odoo_core_fields_get to see required fields and valid values.",
                     original_error=str(exc),
+                )
+
+            # Validate that we got an actual ID back, not an error dict
+            if not isinstance(new_id, (int, list)):
+                err_msg = str(new_id)
+                if isinstance(new_id, dict):
+                    err_msg = new_id.get("message", new_id.get("name", str(new_id)))
+                return _error_response(
+                    "validation", "VALIDATION_ERROR",
+                    err_msg,
+                    suggestion="Use odoo_core_fields_get to see required fields and valid values.",
+                    original_error=str(new_id),
                 )
 
             return json.dumps({
