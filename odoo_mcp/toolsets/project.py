@@ -45,7 +45,7 @@ class ProjectToolset(BaseToolset):
         ) -> dict[str, Any]:
             """Create a project task (REQ-05-30).
 
-            priority: '0'=Normal, '1'=Urgent.
+            priority: '0'=Low (default), '1'=High.
             project_id or project_name to assign to a project.
             """
             if not name:

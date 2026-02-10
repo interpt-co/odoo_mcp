@@ -3,9 +3,16 @@
 Implements stock/warehouse workflows per SPEC-05 (REQ-05-18 through REQ-05-22).
 
 stock.picking states:
-  draft -> [action_confirm] -> confirmed/assigned
+  draft -> [action_confirm] -> waiting/confirmed -> [action_assign] -> assigned
   assigned -> [button_validate] -> done
   Any -> [action_cancel] -> cancel
+
+  'waiting' = waiting for another operation (e.g. upstream picking).
+  'confirmed' = waiting for stock availability.
+
+Wizard notes:
+  - stock.immediate.transfer: only exists in v15-v16 (removed in v17).
+  - stock.backorder.confirmation: exists in all versions.
 """
 
 from __future__ import annotations
@@ -124,12 +131,12 @@ class InventoryToolset(BaseToolset):
         ) -> dict[str, Any]:
             """Validate (process) a stock picking (REQ-05-20, REQ-05-21).
 
-            Calls button_validate. Handles stock.immediate.transfer and
-            stock.backorder.confirmation wizards automatically via the
+            Calls button_validate. Handles stock.immediate.transfer (v15-v16 only)
+            and stock.backorder.confirmation wizards automatically via the
             wizard protocol.
 
             stock.picking states:
-              draft -> confirmed -> assigned -> [button_validate] -> done
+              draft -> waiting/confirmed -> assigned -> [button_validate] -> done
             """
             resolved = await resolve_name(
                 connection, "stock.picking", picking_id, picking_name, "picking"

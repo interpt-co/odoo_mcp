@@ -52,7 +52,9 @@ class AccountingToolset(BaseToolset):
             """Create a customer or vendor invoice (REQ-05-11).
 
             move_type: out_invoice (Customer Invoice), out_refund (Credit Note),
-                       in_invoice (Vendor Bill), in_refund (Vendor Credit Note).
+                       in_invoice (Vendor Bill), in_refund (Vendor Credit Note),
+                       entry (Journal Entry), out_receipt (Sales Receipt),
+                       in_receipt (Purchase Receipt).
             Lines use (0, 0, values) on invoice_line_ids (REQ-05-12).
             Set post=True to also post (validate) the invoice.
 

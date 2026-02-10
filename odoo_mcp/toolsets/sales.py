@@ -2,12 +2,18 @@
 
 Implements sales order workflows per SPEC-05 (REQ-05-01 through REQ-05-10, REQ-05-37).
 
-sale.order states:
-  draft (Quotation) -> [action_confirm] -> sale (Sales Order)
-  draft -> [action_cancel] -> cancel
+sale.order states (v15-v16):
+  draft (Quotation) -> sent -> [action_confirm] -> sale (Sales Order)
   sale -> [action_done] -> done (Locked)
-  sale -> [action_cancel] -> cancel (if no deliveries/invoices)
+  draft/sent/sale -> [action_cancel] -> cancel
   cancel -> [action_draft] -> draft (Reset to Draft)
+
+sale.order states (v17+):
+  draft (Quotation) -> sent -> [action_confirm] -> sale (Sales Order)
+  sale -> [action_lock] -> sale (locked=True)
+  draft/sent/sale -> [action_cancel] -> cancel
+  cancel -> [action_draft] -> draft (Reset to Draft)
+  Note: 'done' state was removed in v17; replaced by 'locked' boolean field.
 """
 
 from __future__ import annotations
@@ -23,12 +29,18 @@ from odoo_mcp.toolsets.helpers import resolve_partner, resolve_product, resolve_
 logger = logging.getLogger("odoo_mcp.toolsets.sales")
 
 STATE_MACHINE_DOC = """
-sale.order states:
-  draft (Quotation) -> [action_confirm] -> sale (Sales Order)
-  draft -> [action_cancel] -> cancel
+sale.order states (v15-v16):
+  draft (Quotation) -> sent -> [action_confirm] -> sale (Sales Order)
   sale -> [action_done] -> done (Locked)
-  sale -> [action_cancel] -> cancel (if no deliveries/invoices)
+  draft/sent/sale -> [action_cancel] -> cancel
   cancel -> [action_draft] -> draft (Reset to Draft)
+
+sale.order states (v17+):
+  draft (Quotation) -> sent -> [action_confirm] -> sale (Sales Order)
+  sale -> [action_lock] -> sale (locked=True)
+  draft/sent/sale -> [action_cancel] -> cancel
+  cancel -> [action_draft] -> draft (Reset to Draft)
+  Note: 'done' state removed in v17; replaced by 'locked' boolean field.
 """
 
 
@@ -66,9 +78,10 @@ class SalesToolset(BaseToolset):
             Set confirm=True to also confirm the order.
 
             sale.order states:
-              draft (Quotation) -> [action_confirm] -> sale (Sales Order)
-              draft -> [action_cancel] -> cancel
-              sale -> [action_done] -> done (Locked)
+              draft (Quotation) -> sent -> [action_confirm] -> sale (Sales Order)
+              v15-v16: sale -> [action_done] -> done (Locked)
+              v17+: sale -> [action_lock] -> sale (locked=True)
+              draft/sent/sale -> [action_cancel] -> cancel
               cancel -> [action_draft] -> draft (Reset to Draft)
             """
             # Resolve partner
@@ -296,7 +309,9 @@ class SalesToolset(BaseToolset):
             Optionally includes order lines, deliveries, and invoices.
 
             sale.order states:
-              draft (Quotation) -> sale (Sales Order) -> done (Locked)
+              draft (Quotation) -> sent -> sale (Sales Order)
+              v15-v16: sale -> done (Locked)
+              v17+: sale with locked=True (check 'locked' field)
               Any -> cancel
             """
             resolved = await resolve_order(
@@ -312,6 +327,7 @@ class SalesToolset(BaseToolset):
                 fields=[
                     "name",
                     "state",
+                    "locked",
                     "partner_id",
                     "date_order",
                     "amount_untaxed",
@@ -331,6 +347,7 @@ class SalesToolset(BaseToolset):
                 "id": order_id,
                 "name": order.get("name", ""),
                 "state": order.get("state", ""),
+                "locked": order.get("locked", False),
                 "partner": format_many2one(order.get("partner_id")),
                 "date_order": order.get("date_order", ""),
                 "amount_untaxed": order.get("amount_untaxed", 0),

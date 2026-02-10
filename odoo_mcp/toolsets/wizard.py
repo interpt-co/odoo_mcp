@@ -96,7 +96,7 @@ KNOWN_WIZARDS: dict[str, KnownWizard] = {
     ),
     "stock.immediate.transfer": KnownWizard(
         model="stock.immediate.transfer",
-        description="Process all quantities immediately (no backorder)",
+        description="Process all quantities immediately (no backorder). Only exists in v15-v16.",
         source_model="stock.picking",
         action_method="process",
         fields={
@@ -108,6 +108,7 @@ KNOWN_WIZARDS: dict[str, KnownWizard] = {
             ),
         },
         context_keys=["active_model", "active_ids", "button_validate_picking_ids"],
+        max_odoo_version=16,
     ),
     "stock.backorder.confirmation": KnownWizard(
         model="stock.backorder.confirmation",

@@ -95,6 +95,15 @@ SEARCH_CONFIGS: dict[str, ModelSearchConfig] = {
         has_chatter=True,
         related_models=["project.project"],
     ),
+    "stock.picking": ModelSearchConfig(
+        model="stock.picking",
+        name_field="name",
+        search_fields=["name", "origin"],
+        deep_search_fields=["note"],
+        default_fields=["id", "name", "partner_id", "state", "picking_type_id", "scheduled_date"],
+        has_chatter=True,
+        related_models=["res.partner"],
+    ),
 }
 
 # Fallback config (REQ-08-06)
