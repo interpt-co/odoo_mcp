@@ -205,6 +205,43 @@ def _format_action_result(result: Any) -> dict[str, Any]:
 class CoreToolset(BaseToolset):
     """Core CRUD operations on any Odoo model."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._field_type_cache: dict[str, dict[str, str]] = {}
+
+    async def _get_field_types(
+        self, model: str, connection: Any, registry: Any,
+    ) -> dict[str, str]:
+        """Resolve field name → field type mapping with caching.
+
+        Tries registry first (no RPC), falls back to ``fields_get`` RPC.
+        """
+        if model in self._field_type_cache:
+            return self._field_type_cache[model]
+
+        # Try registry (fast, no RPC)
+        if registry is not None:
+            try:
+                model_info = registry.get_model(model)
+                if model_info is not None and model_info.fields:
+                    result = {fname: finfo.type for fname, finfo in model_info.fields.items()}
+                    self._field_type_cache[model] = result
+                    return result
+            except Exception:
+                pass
+
+        # Fall back to RPC
+        try:
+            raw = await connection.execute_kw(
+                model, "fields_get", [], {"attributes": ["type"]},
+            )
+            result = {fname: finfo["type"] for fname, finfo in (raw or {}).items() if "type" in finfo}
+            self._field_type_cache[model] = result
+            return result
+        except Exception:
+            logger.debug("Failed to resolve field types for %s", model)
+            return {}
+
     def metadata(self) -> ToolsetMetadata:
         return ToolsetMetadata(
             name="core",
@@ -252,14 +289,22 @@ class CoreToolset(BaseToolset):
         """Yield ``(name, handler, description, annotations_kw)`` for read-only tools."""
         yield (
             tool_name("core", "search_read"),
-            self._make_search_read(connection, config),
-            f"Search records and return field values.\n\n{DOMAIN_SYNTAX_HELP}",
+            self._make_search_read(connection, config, registry),
+            (
+                f"Search records and return field values.\n\n{DOMAIN_SYNTAX_HELP}\n\n"
+                "Binary fields (images, files) are excluded from results by default.\n"
+                "To download file attachments, prefer odoo_attachments_get_content with save_path."
+            ),
             ANNOTATIONS_READ_ONLY,
         )
         yield (
             tool_name("core", "read"),
-            self._make_read(connection, config),
-            "Read specific records by ID.",
+            self._make_read(connection, config, registry),
+            (
+                "Read specific records by ID.\n\n"
+                "Binary fields (images, files) are excluded from results by default.\n"
+                "To download file attachments, prefer odoo_attachments_get_content with save_path."
+            ),
             ANNOTATIONS_READ_ONLY,
         )
         yield (
@@ -307,7 +352,7 @@ class CoreToolset(BaseToolset):
 
     # ---- search_read (REQ-04-01 .. REQ-04-05) ---------------------------
 
-    def _make_search_read(self, connection: Any, config: Any):
+    def _make_search_read(self, connection: Any, config: Any, registry: Any = None):
         from ..search.domain import DomainValidationError, validate_domain
 
         async def handler(
@@ -372,8 +417,18 @@ class CoreToolset(BaseToolset):
                 result = result.get("records", result.get("result", []))
             records = result if isinstance(result, list) else []
 
+            # Resolve field types for normalisation (REQ-04-36)
+            field_types = await self._get_field_types(model, connection, registry)
+            user_requested = set(fields) if fields and fields != ["*"] else None
+
             # Normalise (REQ-04-05)
-            records = normalize_records(records)
+            records = normalize_records(
+                records,
+                field_types=field_types,
+                requested_fields=user_requested,
+                auto_save_binary=True,
+                model=model,
+            )
 
             # Filter blocked fields from results
             blocked = _get_field_blocklist(config)
@@ -394,7 +449,7 @@ class CoreToolset(BaseToolset):
 
     # ---- read (REQ-04-06 / REQ-04-07) -----------------------------------
 
-    def _make_read(self, connection: Any, config: Any):
+    def _make_read(self, connection: Any, config: Any, registry: Any = None):
         async def handler(
             model: str,
             ids: list[int],
@@ -438,11 +493,27 @@ class CoreToolset(BaseToolset):
                                 records.extend(r)
                         except Exception:
                             missing_ids.append(rid)
-                    records = normalize_records(records)
+                    field_types = await self._get_field_types(model, connection, registry)
+                    user_requested = set(fields) if fields else None
+                    records = normalize_records(
+                        records,
+                        field_types=field_types,
+                        requested_fields=user_requested,
+                        auto_save_binary=True,
+                        model=model,
+                    )
                     return json.dumps({"records": records, "missing_ids": missing_ids})
                 raise
 
-            records = normalize_records(result or [])
+            field_types = await self._get_field_types(model, connection, registry)
+            user_requested = set(fields) if fields else None
+            records = normalize_records(
+                result or [],
+                field_types=field_types,
+                requested_fields=user_requested,
+                auto_save_binary=True,
+                model=model,
+            )
 
             # Filter blocked fields
             blocked = _get_field_blocklist(config)

@@ -14,6 +14,44 @@ from odoo_mcp.connection.version import (
 )
 
 
+class TestOdooVersionComparison:
+    """Test OdooVersion rich comparison operators."""
+
+    def test_lt_int(self):
+        assert OdooVersion(major=16) < 17
+        assert not OdooVersion(major=17) < 17
+
+    def test_le_int(self):
+        assert OdooVersion(major=17) <= 17
+        assert OdooVersion(major=16) <= 17
+
+    def test_gt_int(self):
+        assert OdooVersion(major=18) > 17
+        assert not OdooVersion(major=17) > 17
+
+    def test_ge_int(self):
+        assert OdooVersion(major=17) >= 17
+        assert OdooVersion(major=18) >= 17
+
+    def test_eq_int(self):
+        assert OdooVersion(major=17) == 17
+        assert not OdooVersion(major=16) == 17
+
+    def test_compare_two_versions(self):
+        assert OdooVersion(major=16) < OdooVersion(major=17)
+        assert OdooVersion(major=17, minor=1) > OdooVersion(major=17, minor=0)
+
+    def test_compare_tuple(self):
+        assert OdooVersion(major=17, minor=0, micro=1) > (17, 0, 0)
+
+    def test_hash_consistency(self):
+        v = OdooVersion(major=17)
+        assert hash(v) == hash(OdooVersion(major=17))
+
+    def test_unsupported_type_returns_not_implemented(self):
+        assert OdooVersion(major=17).__eq__("17") is NotImplemented
+
+
 class TestParseVersion:
     """Test version parsing for all documented formats (REQ-02a-05)."""
 

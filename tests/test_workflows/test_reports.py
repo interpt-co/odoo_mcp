@@ -15,6 +15,7 @@ def _make_connection(odoo_version: int = 17) -> MagicMock:
     conn = MagicMock()
     conn.execute_kw = AsyncMock(return_value=None)
     conn.search_read = AsyncMock(return_value=[])
+    conn.render_report = AsyncMock(return_value={"result": "", "format": "pdf"})
     conn.odoo_version = odoo_version
     return conn
 
@@ -92,14 +93,18 @@ class TestReportsGenerate:
         assert result["status"] == "error"
         assert "20" in result["message"]
 
-    def test_generate_success_json2(self):
+    def test_generate_success_base64_dict(self):
+        """render_report returns {'result': base64_pdf, 'format': 'pdf'}."""
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection(odoo_version=17)
         asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         pdf_bytes = b"%PDF-1.4 test content"
-        conn.execute_kw = AsyncMock(return_value=(pdf_bytes, "pdf"))
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
+        conn.render_report = AsyncMock(
+            return_value={"result": pdf_b64, "format": "pdf"}
+        )
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"](
@@ -108,18 +113,25 @@ class TestReportsGenerate:
             )
         )
         assert result["format"] == "pdf"
-        assert result["content_base64"]
+        assert result["content_base64"] == pdf_b64
         assert result["file_name"] == "report_saleorder_42.pdf"
-        assert result["size"] > 0
+        assert result["size"] == len(pdf_bytes)
+        conn.render_report.assert_called_once_with(
+            "sale.report_saleorder", [42]
+        )
 
     def test_generate_success_xmlrpc(self):
+        """render_report works the same regardless of Odoo version."""
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection(odoo_version=15)
         asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         pdf_bytes = b"%PDF-1.4 test"
-        conn.execute_kw = AsyncMock(return_value=(pdf_bytes, "pdf"))
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
+        conn.render_report = AsyncMock(
+            return_value={"result": pdf_b64, "format": "pdf"}
+        )
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"](
@@ -128,9 +140,10 @@ class TestReportsGenerate:
             )
         )
         assert result["format"] == "pdf"
-        # For XML-RPC (v < 17), uses render_qweb_pdf
-        call_args = conn.execute_kw.call_args
-        assert call_args[0][1] == "render_qweb_pdf"
+        assert result["content_base64"] == pdf_b64
+        conn.render_report.assert_called_once_with(
+            "sale.report_saleorder", [1]
+        )
 
     def test_generate_error(self):
         ts = ReportsToolset()
@@ -138,7 +151,7 @@ class TestReportsGenerate:
         conn = _make_connection()
         asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
-        conn.execute_kw = AsyncMock(side_effect=Exception("Report not found"))
+        conn.render_report = AsyncMock(side_effect=Exception("Report not found"))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"](

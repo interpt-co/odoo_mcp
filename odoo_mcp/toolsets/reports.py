@@ -57,41 +57,27 @@ class ReportsToolset(BaseToolset):
                     "message": "Maximum 20 record_ids allowed per report.",
                 }
 
-            odoo_version = connection.odoo_version
-
             try:
-                if odoo_version < 17:
-                    # XML-RPC path (Odoo 14-16) (REQ-09-23)
-                    result = await connection.execute_kw(
-                        "ir.actions.report",
-                        "render_qweb_pdf",
-                        [report_name, record_ids],
-                        context=context,
-                    )
-                else:
-                    # JSON-RPC/JSON-2 path (Odoo 17+) (REQ-09-23)
-                    result = await connection.execute_kw(
-                        "ir.actions.report",
-                        "_render_qweb_pdf",
-                        [report_name, record_ids],
-                        context=context,
-                    )
+                # Use /xmlrpc/2/report endpoint (REQ-09-23)
+                # This works universally across Odoo 14-18 and all protocols.
+                result = await connection.render_report(report_name, record_ids)
             except Exception as exc:
                 return {
                     "status": "error",
                     "message": f"Report generation failed: {exc}",
                 }
 
-            # Parse result - typically (pdf_content, report_type) or dict
+            # Parse result — render_report returns
+            # {'result': base64_pdf, 'format': 'pdf'}
             content_b64 = ""
-            if isinstance(result, (list, tuple)) and len(result) >= 1:
+            if isinstance(result, dict) and "result" in result:
+                content_b64 = result["result"]
+            elif isinstance(result, (list, tuple)) and len(result) >= 1:
                 pdf_bytes = result[0]
                 if isinstance(pdf_bytes, bytes):
                     content_b64 = base64.b64encode(pdf_bytes).decode("ascii")
                 elif isinstance(pdf_bytes, str):
                     content_b64 = pdf_bytes
-            elif isinstance(result, dict) and "result" in result:
-                content_b64 = result["result"]
             elif isinstance(result, bytes):
                 content_b64 = base64.b64encode(result).decode("ascii")
             elif isinstance(result, str):

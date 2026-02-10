@@ -11,6 +11,7 @@ from odoo_mcp.connection.protocol import (
     AccessDeniedError,
     AuthenticationError,
     ConnectionError,
+    Json2EndpointNotFoundError,
     OdooRpcError,
 )
 from odoo_mcp.connection.json2_adapter import Json2Adapter
@@ -113,7 +114,7 @@ class TestJson2Adapter:
         )
 
         with patch.object(adapter._client, "post", new_callable=AsyncMock, return_value=response):
-            with pytest.raises(OdooRpcError, match="not found"):
+            with pytest.raises(Json2EndpointNotFoundError, match="not found"):
                 await adapter.execute_kw("bad.model", "search_read", [[]])
 
     @pytest.mark.asyncio

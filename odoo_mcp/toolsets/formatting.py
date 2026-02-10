@@ -5,9 +5,15 @@ Implements REQ-04-05, REQ-04-35 through REQ-04-37, REQ-08-18, REQ-08-19.
 
 from __future__ import annotations
 
+import base64
 import html
+import logging
+import os
 import re
+import tempfile
 from typing import Any
+
+logger = logging.getLogger("odoo_mcp.toolsets.formatting")
 
 # ---------------------------------------------------------------------------
 # Known HTML field names (REQ-08-18)
@@ -114,6 +120,44 @@ def format_size_human(size_bytes: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Binary auto-save (REQ-04-36)
+# ---------------------------------------------------------------------------
+
+def save_binary_to_file(
+    b64_data: str,
+    field_name: str,
+    record_id: int | None = None,
+    model: str = "",
+) -> str:
+    """Decode base64 binary data and save to a temporary file.
+
+    Returns the file path on success, or ``""`` on decode failure.
+    """
+    prefix_parts: list[str] = []
+    if model:
+        prefix_parts.append(model.replace(".", "_"))
+    if record_id is not None:
+        prefix_parts.append(str(record_id))
+    prefix_parts.append(field_name)
+    prefix = "_".join(prefix_parts) + "_"
+
+    try:
+        raw = base64.b64decode(b64_data, validate=True)
+    except Exception:
+        logger.debug("Failed to decode base64 for %s.%s (record %s)", model, field_name, record_id)
+        return ""
+
+    try:
+        fd, path = tempfile.mkstemp(prefix=prefix)
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        return path
+    except Exception:
+        logger.debug("Failed to write binary file for %s.%s (record %s)", model, field_name, record_id)
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -124,6 +168,8 @@ def normalize_record(
     strip_html_fields: bool = True,
     exclude_binary: bool = True,
     requested_fields: set[str] | None = None,
+    auto_save_binary: bool = False,
+    model: str = "",
 ) -> dict[str, Any]:
     """Apply all normalisation rules to a single record dict.
 
@@ -142,6 +188,11 @@ def normalize_record(
     requested_fields:
         Fields that were explicitly requested by the caller.  Binary fields
         present in this set are kept.
+    auto_save_binary:
+        When *True* and a binary field is explicitly requested, save the
+        data to a temporary file and replace the value with a metadata dict.
+    model:
+        Model technical name, used for descriptive temp file naming.
     """
     if field_types is None:
         field_types = {}
@@ -155,6 +206,26 @@ def normalize_record(
         # Binary field exclusion (REQ-04-36)
         if ftype == "binary" and exclude_binary and fname not in requested_fields:
             continue
+
+        # Binary auto-save: explicitly requested binary fields get saved to disk
+        if (
+            ftype == "binary"
+            and fname in requested_fields
+            and auto_save_binary
+            and isinstance(value, str)
+            and len(value) > 0
+        ):
+            saved_path = save_binary_to_file(
+                value, fname, record.get("id"), model,
+            )
+            if saved_path:
+                value = {
+                    "type": "binary_file",
+                    "path": saved_path,
+                    "field": fname,
+                    "size": len(value),
+                    "note": "Binary data saved to file. Use the path to access the content.",
+                }
 
         # False normalisation (REQ-04-35)
         if value is False:
@@ -186,7 +257,9 @@ def normalize_record(
 def normalize_records(
     records: list[dict[str, Any]],
     field_types: dict[str, str] | None = None,
+    *,
+    model: str = "",
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
     """Apply normalisation to a list of records."""
-    return [normalize_record(r, field_types, **kwargs) for r in records]
+    return [normalize_record(r, field_types, model=model, **kwargs) for r in records]

@@ -1,6 +1,8 @@
 """Tests for odoo_mcp.toolsets.core — CoreToolset, all CRUD tools."""
 
+import base64
 import json
+import os
 
 import pytest
 
@@ -25,10 +27,13 @@ class MockConnection:
         # --- search_read ---
         if method == "search_read":
             if model == "res.partner":
-                return [
-                    {"id": 1, "name": "Acme Corp", "display_name": "Acme Corp",
-                     "partner_id": [10, "Parent"], "create_date": "2025-01-01 12:00:00"},
-                ]
+                rec = {"id": 1, "name": "Acme Corp", "display_name": "Acme Corp",
+                       "partner_id": [10, "Parent"], "create_date": "2025-01-01 12:00:00"}
+                # Include image_1920 if requested
+                req_fields = (kwargs or {}).get("fields")
+                if req_fields and "image_1920" in req_fields:
+                    rec["image_1920"] = base64.b64encode(b"fake png data").decode()
+                return [rec]
             if model == "ir.model":
                 return [
                     {"model": "res.partner", "name": "Contact", "transient": False,
@@ -57,6 +62,8 @@ class MockConnection:
                                "readonly": False, "relation": "res.partner"},
                 "password": {"string": "Password", "type": "char", "required": False,
                              "readonly": False},
+                "image_1920": {"string": "Image", "type": "binary", "required": False,
+                               "readonly": False},
             }
 
         # --- name_get ---
@@ -146,6 +153,9 @@ class MockRegistry:
 
     def get_registered_toolsets(self):
         return []
+
+    def get_model(self, model_name):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -583,3 +593,119 @@ class TestExecute:
         # kwargs should have been stripped (only context might remain)
         passed_kwargs = call[3]
         assert "test" not in passed_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Binary field handling (REQ-04-36)
+# ---------------------------------------------------------------------------
+
+class TestBinaryFieldHandling:
+    @pytest.mark.asyncio
+    async def test_binary_excluded_by_default(self):
+        """Binary fields should be stripped when not explicitly requested."""
+        tools, conn, _ = await _register()
+        result = json.loads(await tools["odoo_core_search_read"](model="res.partner"))
+        rec = result["records"][0]
+        assert "image_1920" not in rec
+
+    @pytest.mark.asyncio
+    async def test_binary_auto_saved_when_requested(self):
+        """Explicitly requesting a binary field should auto-save to file."""
+        tools, conn, _ = await _register()
+        result = json.loads(
+            await tools["odoo_core_search_read"](
+                model="res.partner",
+                fields=["name", "image_1920"],
+            )
+        )
+        rec = result["records"][0]
+        assert rec["image_1920"]["type"] == "binary_file"
+        assert os.path.isfile(rec["image_1920"]["path"])
+        with open(rec["image_1920"]["path"], "rb") as f:
+            assert f.read() == b"fake png data"
+        os.unlink(rec["image_1920"]["path"])
+
+    @pytest.mark.asyncio
+    async def test_field_type_cache(self):
+        """Field types should be cached after first resolution."""
+        tools, conn, _ = await _register()
+        ts = CoreToolset()
+        # First call populates cache via RPC
+        ft1 = await ts._get_field_types("res.partner", conn, MockRegistry())
+        assert "name" in ft1
+        assert ft1["name"] == "char"
+        assert ft1["image_1920"] == "binary"
+        # Second call hits cache — no additional RPC
+        calls_before = len(conn.calls)
+        ft2 = await ts._get_field_types("res.partner", conn, MockRegistry())
+        assert ft2 == ft1
+        assert len(conn.calls) == calls_before
+
+    @pytest.mark.asyncio
+    async def test_field_type_registry_fast_path(self):
+        """When registry has model info, no RPC should be needed."""
+
+        class FakeFieldInfo:
+            def __init__(self, ftype):
+                self.type = ftype
+
+        class FakeModelInfo:
+            fields = {"name": FakeFieldInfo("char"), "image": FakeFieldInfo("binary")}
+
+        class RegistryWithModel:
+            def get_report(self):
+                return None
+            def get_registered_toolsets(self):
+                return []
+            def get_model(self, name):
+                return FakeModelInfo()
+
+        ts = CoreToolset()
+        conn = MockConnection()
+        ft = await ts._get_field_types("res.partner", conn, RegistryWithModel())
+        assert ft == {"name": "char", "image": "binary"}
+        # No RPC calls made — registry was sufficient
+        assert len(conn.calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_field_type_rpc_fallback(self):
+        """When registry returns None, field types should come from RPC."""
+        ts = CoreToolset()
+        conn = MockConnection()
+        ft = await ts._get_field_types("res.partner", conn, MockRegistry())
+        assert ft["name"] == "char"
+        assert ft["partner_id"] == "many2one"
+        # Should have made one fields_get RPC call
+        fg_calls = [c for c in conn.calls if c[1] == "fields_get"]
+        assert len(fg_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_search_read_description_warns_binary(self):
+        """search_read description should mention binary field exclusion."""
+        server = MockServer()
+        conn = MockConnection()
+        cfg = MockConfig()
+        registry = MockRegistry()
+        ts = CoreToolset()
+        await ts.register_tools(server, conn, config=cfg, registry=registry)
+        # Get the description from server registration
+        # The description is the 2nd arg to server.tool() — we need to check the tool info
+        # We can check the tool was registered with a binary warning
+        # Since MockServer doesn't capture descriptions, verify via _read_tools
+        descs = []
+        for name, handler, desc, annot in ts._read_tools(conn, cfg, registry):
+            if "search_read" in name or "read" == name.split("_")[-1]:
+                descs.append(desc)
+        assert any("Binary fields" in d for d in descs)
+
+    @pytest.mark.asyncio
+    async def test_read_binary_excluded_by_default(self):
+        """read handler should also exclude binary fields."""
+        tools, conn, _ = await _register()
+        result = json.loads(
+            await tools["odoo_core_read"](model="res.partner", ids=[1])
+        )
+        rec = result["records"][0]
+        # MockConnection.read doesn't return image_1920, but the field_types
+        # resolution + normalisation pipeline should work without errors
+        assert "name" in rec

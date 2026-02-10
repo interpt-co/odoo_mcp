@@ -1,11 +1,15 @@
 """Tests for odoo_mcp.toolsets.formatting — response normalisation."""
 
+import base64
+import os
+
 import pytest
 
 from odoo_mcp.toolsets.formatting import (
     normalize_datetime,
     normalize_record,
     normalize_records,
+    save_binary_to_file,
     strip_html,
 )
 
@@ -170,3 +174,121 @@ class TestNormalizeRecords:
         assert result[0]["partner_id"] == {"id": 2, "name": "X"}
         assert result[1]["name"] == "Test"
         assert result[1]["partner_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# save_binary_to_file
+# ---------------------------------------------------------------------------
+
+class TestSaveBinaryToFile:
+    def test_basic_save(self, tmp_path):
+        data = base64.b64encode(b"hello world").decode()
+        path = save_binary_to_file(data, "datas", record_id=42, model="ir.attachment")
+        assert path != ""
+        assert os.path.isfile(path)
+        with open(path, "rb") as f:
+            assert f.read() == b"hello world"
+        os.unlink(path)
+
+    def test_meaningful_filename(self):
+        data = base64.b64encode(b"test").decode()
+        path = save_binary_to_file(data, "image_1920", record_id=7, model="res.partner")
+        assert "res_partner" in os.path.basename(path)
+        assert "7" in os.path.basename(path)
+        assert "image_1920" in os.path.basename(path)
+        os.unlink(path)
+
+    def test_invalid_base64_returns_empty(self):
+        assert save_binary_to_file("not-valid-base64!!!", "datas") == ""
+
+    def test_empty_data(self):
+        # Empty string is valid base64 (decodes to b"")
+        path = save_binary_to_file("", "datas")
+        # Empty string has length 0, but save_binary_to_file accepts it
+        if path:
+            os.unlink(path)
+
+    def test_no_model_no_record(self):
+        data = base64.b64encode(b"abc").decode()
+        path = save_binary_to_file(data, "file_data")
+        assert path != ""
+        assert "file_data" in os.path.basename(path)
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Binary auto-save in normalize_record
+# ---------------------------------------------------------------------------
+
+class TestBinaryAutoSave:
+    def test_auto_save_creates_file(self):
+        b64 = base64.b64encode(b"PDF content here").decode()
+        record = {"id": 5, "datas": b64, "name": "test.pdf"}
+        result = normalize_record(
+            record,
+            {"datas": "binary", "name": "char"},
+            requested_fields={"datas", "name"},
+            auto_save_binary=True,
+            model="ir.attachment",
+        )
+        assert result["datas"]["type"] == "binary_file"
+        assert os.path.isfile(result["datas"]["path"])
+        with open(result["datas"]["path"], "rb") as f:
+            assert f.read() == b"PDF content here"
+        os.unlink(result["datas"]["path"])
+        assert result["name"] == "test.pdf"
+
+    def test_auto_save_disabled_keeps_raw(self):
+        b64 = base64.b64encode(b"raw").decode()
+        record = {"id": 1, "datas": b64}
+        result = normalize_record(
+            record,
+            {"datas": "binary"},
+            requested_fields={"datas"},
+            auto_save_binary=False,
+        )
+        assert result["datas"] == b64
+
+    def test_auto_save_default_off(self):
+        b64 = base64.b64encode(b"raw").decode()
+        record = {"id": 1, "datas": b64}
+        result = normalize_record(
+            record,
+            {"datas": "binary"},
+            requested_fields={"datas"},
+        )
+        # Default auto_save_binary is False, so raw data kept
+        assert result["datas"] == b64
+
+    def test_auto_save_empty_value_no_save(self):
+        record = {"id": 1, "datas": ""}
+        result = normalize_record(
+            record,
+            {"datas": "binary"},
+            requested_fields={"datas"},
+            auto_save_binary=True,
+        )
+        # Empty string should not trigger auto-save
+        assert result["datas"] == ""
+
+    def test_auto_save_false_value(self):
+        record = {"id": 1, "datas": False}
+        result = normalize_record(
+            record,
+            {"datas": "binary"},
+            requested_fields={"datas"},
+            auto_save_binary=True,
+        )
+        # False → None via _normalize_false
+        assert result["datas"] is None
+
+    def test_binary_excluded_when_not_requested(self):
+        b64 = base64.b64encode(b"data").decode()
+        record = {"id": 1, "image": b64, "name": "Test"}
+        result = normalize_record(
+            record,
+            {"image": "binary", "name": "char"},
+            auto_save_binary=True,
+        )
+        assert "image" not in result
+        assert result["name"] == "Test"

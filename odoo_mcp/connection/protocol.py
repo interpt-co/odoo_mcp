@@ -39,6 +39,52 @@ class OdooVersion:
     full_string: str = ""
     edition: str = "community"
 
+    def _cmp_tuple(self) -> tuple[int, int, int]:
+        return (self.major, self.minor, self.micro)
+
+    def _coerce(self, other: Any) -> tuple[int, int, int]:
+        if isinstance(other, OdooVersion):
+            return other._cmp_tuple()
+        if isinstance(other, int):
+            return (other, 0, 0)
+        if isinstance(other, tuple):
+            padded = (list(other) + [0, 0, 0])[:3]
+            return (padded[0], padded[1], padded[2])
+        return NotImplemented
+
+    def __eq__(self, other: object) -> bool:
+        rhs = self._coerce(other)
+        if rhs is NotImplemented:
+            return NotImplemented
+        return self._cmp_tuple() == rhs
+
+    def __lt__(self, other: object) -> bool:
+        rhs = self._coerce(other)
+        if rhs is NotImplemented:
+            return NotImplemented
+        return self._cmp_tuple() < rhs
+
+    def __le__(self, other: object) -> bool:
+        rhs = self._coerce(other)
+        if rhs is NotImplemented:
+            return NotImplemented
+        return self._cmp_tuple() <= rhs
+
+    def __gt__(self, other: object) -> bool:
+        rhs = self._coerce(other)
+        if rhs is NotImplemented:
+            return NotImplemented
+        return self._cmp_tuple() > rhs
+
+    def __ge__(self, other: object) -> bool:
+        rhs = self._coerce(other)
+        if rhs is NotImplemented:
+            return NotImplemented
+        return self._cmp_tuple() >= rhs
+
+    def __hash__(self) -> int:
+        return hash(self._cmp_tuple())
+
     def __str__(self) -> str:
         return self.full_string or f"{self.major}.{self.minor}"
 
@@ -117,6 +163,10 @@ class SessionExpiredError(OdooRpcError):
 
 class AccessDeniedError(OdooRpcError):
     """Access denied by Odoo security rules."""
+
+
+class Json2EndpointNotFoundError(OdooRpcError):
+    """JSON-2 endpoint returned 404 — model/method not exposed via REST API."""
 
 
 # ---------------------------------------------------------------------------

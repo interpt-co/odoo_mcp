@@ -194,6 +194,49 @@ class XmlRpcAdapter(BaseOdooProtocol):
         except OSError as e:
             raise ConnectionError(f"Network error: {e}")
 
+    def _get_report(self) -> xmlrpc.client.ServerProxy:
+        """Get or create the /xmlrpc/2/report proxy for PDF generation."""
+        if not hasattr(self, "_report") or self._report is None:
+            self._report = xmlrpc.client.ServerProxy(
+                f"{self._url}/xmlrpc/2/report",
+                transport=self._make_transport(),
+                allow_none=True,
+            )
+        return self._report
+
+    async def render_report(
+        self,
+        report_name: str,
+        record_ids: list[int],
+    ) -> dict[str, Any]:
+        """Render a PDF report via the /xmlrpc/2/report endpoint.
+
+        Returns dict with 'result' (base64 PDF) and 'format' keys.
+        """
+        if self._uid is None or self._db is None or self._password is None:
+            raise ConnectionError("Not authenticated — call authenticate() first")
+
+        try:
+            result = await asyncio.to_thread(
+                self._get_report().render_report,
+                self._db,
+                self._uid,
+                self._password,
+                report_name,
+                record_ids,
+            )
+            return result
+        except xmlrpc.client.Fault as e:
+            raise OdooRpcError.from_xmlrpc_fault(
+                e, model="ir.actions.report", method="render_report"
+            )
+        except xmlrpc.client.ProtocolError as e:
+            raise ConnectionError(
+                f"XML-RPC protocol error: {e.errcode} {e.errmsg}"
+            )
+        except OSError as e:
+            raise ConnectionError(f"Network error: {e}")
+
     async def version_info(self) -> dict:
         """Get server version information via XML-RPC common endpoint."""
         try:
@@ -206,6 +249,7 @@ class XmlRpcAdapter(BaseOdooProtocol):
         """REQ-02b-15: Release resources."""
         self._common = None
         self._object = None
+        self._report = None
         self._uid = None
 
     def is_connected(self) -> bool:

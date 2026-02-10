@@ -15,6 +15,7 @@ from odoo_mcp.connection.protocol import (
     AuthenticationError,
     BaseOdooProtocol,
     ConnectionError,
+    Json2EndpointNotFoundError,
     OdooRpcError,
 )
 
@@ -186,7 +187,7 @@ class Json2Adapter(BaseOdooProtocol):
                     "Access denied", model=model, method=method
                 )
             if response.status_code == 404:
-                raise OdooRpcError(
+                raise Json2EndpointNotFoundError(
                     f"Model '{model}' or method '{method}' not found",
                     model=model,
                     method=method,
@@ -224,7 +225,7 @@ class Json2Adapter(BaseOdooProtocol):
                 return result
             return data
 
-        except (AuthenticationError, AccessDeniedError, OdooRpcError):
+        except (AuthenticationError, AccessDeniedError, Json2EndpointNotFoundError, OdooRpcError):
             raise
         except httpx.TimeoutException:
             raise ConnectionError("Request timed out")

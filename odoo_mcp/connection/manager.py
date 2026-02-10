@@ -6,9 +6,12 @@ REQ-02-18 through REQ-02-33.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 from typing import Any
+
+import httpx
 
 from odoo_mcp.config import OdooMcpConfig
 from odoo_mcp.connection.json2_adapter import Json2Adapter
@@ -18,6 +21,7 @@ from odoo_mcp.connection.protocol import (
     BaseOdooProtocol,
     ConnectionError,
     ConnectionState,
+    Json2EndpointNotFoundError,
     OdooRpcError,
     OdooVersion,
     SessionExpiredError,
@@ -44,6 +48,12 @@ class ConnectionManager:
         self._username: str | None = None
         self._last_activity: float = 0.0
         self._installed_modules: list[str] = []
+        # JSON-2 → XML-RPC fallback state
+        self._xmlrpc_fallback: XmlRpcAdapter | None = None
+        self._fallback_methods: set[tuple[str, str]] = set()
+        # HTTP client for report PDF download
+        self._report_http_client: httpx.AsyncClient | None = None
+        self._owns_report_client: bool = False
 
     # --- Properties (REQ-02-19) ---
 
@@ -227,6 +237,31 @@ class ConnectionManager:
                 )
             raise
 
+    # --- JSON-2 → XML-RPC fallback ---
+
+    async def _get_or_create_xmlrpc_fallback(self) -> XmlRpcAdapter:
+        """Lazily create and authenticate an XML-RPC adapter for fallback."""
+        if self._xmlrpc_fallback is not None:
+            return self._xmlrpc_fallback
+
+        url = self._config.odoo_url
+        db = self._config.odoo_db
+        timeout = self._config.odoo_timeout
+        verify_ssl = self._config.odoo_verify_ssl
+        ca_cert = self._config.odoo_ca_cert
+        username = self._config.odoo_username or ""
+        password = self._config.odoo_api_key or self._config.odoo_password or ""
+
+        adapter = XmlRpcAdapter(
+            url=url, timeout=timeout, verify_ssl=verify_ssl, ca_cert=ca_cert
+        )
+        if self._protocol:
+            adapter.set_base_context(dict(self._protocol._base_context))
+        await adapter.authenticate(db, username, password)
+        self._xmlrpc_fallback = adapter
+        logger.info("Created XML-RPC fallback adapter for JSON-2 404s")
+        return adapter
+
     # --- Health check (REQ-02-20) ---
 
     async def ensure_healthy(self) -> None:
@@ -259,6 +294,23 @@ class ConnectionManager:
         max_attempts = self._config.reconnect_max_attempts
         base_delay = self._config.reconnect_backoff_base
 
+        # Close report HTTP client if we own it
+        if self._report_http_client and self._owns_report_client:
+            try:
+                await self._report_http_client.aclose()
+            except Exception:
+                pass
+        self._report_http_client = None
+        self._owns_report_client = False
+
+        # Close fallback adapter (cache is kept — 404s are deterministic)
+        if self._xmlrpc_fallback:
+            try:
+                await self._xmlrpc_fallback.close()
+            except Exception:
+                pass
+            self._xmlrpc_fallback = None
+
         for attempt in range(1, max_attempts + 1):
             delay = base_delay * (2 ** (attempt - 1))
             logger.info(
@@ -289,6 +341,20 @@ class ConnectionManager:
             f"Failed to reconnect after {max_attempts} attempts"
         )
 
+    async def _execute_via_xmlrpc_fallback(
+        self,
+        model: str,
+        method: str,
+        args: list[Any],
+        kwargs: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute a call via the XML-RPC fallback adapter."""
+        fallback = await self._get_or_create_xmlrpc_fallback()
+        result = await fallback.execute_kw(model, method, args, kwargs, context)
+        self._last_activity = time.monotonic()
+        return result
+
     async def execute_with_retry(
         self,
         model: str,
@@ -303,12 +369,27 @@ class ConnectionManager:
         if not self._protocol:
             raise ConnectionError("Not connected")
 
+        # If this model/method already known to need XML-RPC, skip JSON-2
+        if (model, method) in self._fallback_methods:
+            return await self._execute_via_xmlrpc_fallback(
+                model, method, args, kwargs, context
+            )
+
         try:
             result = await self._protocol.execute_kw(
                 model, method, args, kwargs, context
             )
             self._last_activity = time.monotonic()
             return result
+        except Json2EndpointNotFoundError:
+            logger.warning(
+                "JSON-2 returned 404 for %s/%s, falling back to XML-RPC",
+                model, method,
+            )
+            self._fallback_methods.add((model, method))
+            return await self._execute_via_xmlrpc_fallback(
+                model, method, args, kwargs, context
+            )
         except SessionExpiredError:
             logger.warning("Session expired, reconnecting...")
             await self._reconnect()
@@ -361,11 +442,245 @@ class ConnectionManager:
         if not self._protocol:
             raise ConnectionError("Not connected")
         await self.ensure_healthy()
-        result = await self._protocol.search_read(
-            model, domain, fields=fields, limit=limit, offset=offset, order=order
+
+        # If search_read already known to need XML-RPC for this model, skip JSON-2
+        if (model, "search_read") in self._fallback_methods:
+            fallback = await self._get_or_create_xmlrpc_fallback()
+            result = await fallback.search_read(
+                model, domain, fields=fields, limit=limit, offset=offset, order=order
+            )
+            self._last_activity = time.monotonic()
+            return result
+
+        try:
+            result = await self._protocol.search_read(
+                model, domain, fields=fields, limit=limit, offset=offset, order=order
+            )
+            self._last_activity = time.monotonic()
+            return result
+        except Json2EndpointNotFoundError:
+            logger.warning(
+                "JSON-2 returned 404 for %s/search_read, falling back to XML-RPC",
+                model,
+            )
+            self._fallback_methods.add((model, "search_read"))
+            fallback = await self._get_or_create_xmlrpc_fallback()
+            result = await fallback.search_read(
+                model, domain, fields=fields, limit=limit, offset=offset, order=order
+            )
+            self._last_activity = time.monotonic()
+            return result
+
+    # --- Report rendering (REQ-09-23) ---
+
+    async def _get_report_http_client(self) -> httpx.AsyncClient:
+        """Get an authenticated HTTP client for report PDF download.
+
+        For Json2Adapter: creates a new client with Bearer auth only
+            (avoids Content-Type: application/json which breaks http-type routes).
+        For JsonRpcAdapter: reuses the adapter's session-authenticated client.
+        For XmlRpcAdapter: creates and session-authenticates a new httpx client.
+        """
+        if self._report_http_client is not None:
+            return self._report_http_client
+
+        if not self._protocol:
+            raise ConnectionError("Not connected")
+
+        url = self._config.odoo_url
+        timeout = self._config.odoo_timeout
+        verify_ssl = self._config.odoo_verify_ssl
+        ca_cert = self._config.odoo_ca_cert
+        verify: bool | str = ca_cert if ca_cert else verify_ssl
+
+        # For Json2Adapter: create a new client with Bearer auth but WITHOUT
+        # Content-Type: application/json.  The report endpoint is type='http'
+        # and Odoo routes requests with Content-Type application/json through
+        # the JSON-RPC dispatcher, which rejects the http-type route.
+        if isinstance(self._protocol, Json2Adapter):
+            client = httpx.AsyncClient(
+                base_url=url,
+                timeout=timeout,
+                verify=verify,
+                headers={"Authorization": f"Bearer {self._config.odoo_api_key}"},
+            )
+            self._report_http_client = client
+            self._owns_report_client = True
+            return self._report_http_client
+
+        # Reuse the adapter's httpx client for JsonRpc (session-authenticated,
+        # no conflicting Content-Type default header)
+        if isinstance(self._protocol, JsonRpcAdapter):
+            self._report_http_client = self._protocol._client
+            self._owns_report_client = False
+            return self._report_http_client
+
+        # For XmlRpcAdapter: create a session-authenticated httpx client
+        client = await self._create_session_http_client()
+        self._report_http_client = client
+        self._owns_report_client = True
+        return self._report_http_client
+
+    async def _create_session_http_client(self) -> httpx.AsyncClient:
+        """Create a new httpx client authenticated via /web/session/authenticate."""
+        url = self._config.odoo_url
+        timeout = self._config.odoo_timeout
+        ca_cert = self._config.odoo_ca_cert
+        verify: bool | str = ca_cert if ca_cert else self._config.odoo_verify_ssl
+
+        client = httpx.AsyncClient(
+            base_url=url,
+            timeout=timeout,
+            verify=verify,
         )
-        self._last_activity = time.monotonic()
-        return result
+
+        db = self._config.odoo_db
+        username = self._config.odoo_username or ""
+        password = self._config.odoo_api_key or self._config.odoo_password or ""
+
+        try:
+            response = await client.post(
+                "/web/session/authenticate",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "call",
+                    "params": {
+                        "db": db,
+                        "login": username,
+                        "password": password,
+                    },
+                },
+            )
+            data = response.json()
+            result = data.get("result", {})
+            if not result.get("uid"):
+                raise ConnectionError(
+                    "Report HTTP client: session authentication failed"
+                )
+            session_id = response.cookies.get("session_id")
+            if session_id:
+                client.cookies.set("session_id", session_id)
+        except ConnectionError:
+            await client.aclose()
+            raise
+        except Exception as e:
+            await client.aclose()
+            raise ConnectionError(
+                f"Report HTTP client: authentication failed: {e}"
+            )
+
+        return client
+
+    async def _get_session_http_client(self) -> httpx.AsyncClient:
+        """Get a session-authenticated HTTP client, creating one if needed.
+
+        Used as fallback when Bearer auth doesn't work for report downloads.
+        Stores in _report_http_client, replacing any existing client.
+        """
+        # If we already have a session-authenticated client cached, return it
+        if (
+            self._report_http_client is not None
+            and self._owns_report_client
+            and not isinstance(self._protocol, Json2Adapter)
+        ):
+            return self._report_http_client
+
+        # Close existing Bearer-auth client if we own it
+        if self._report_http_client and self._owns_report_client:
+            try:
+                await self._report_http_client.aclose()
+            except Exception:
+                pass
+
+        client = await self._create_session_http_client()
+        self._report_http_client = client
+        self._owns_report_client = True
+        return client
+
+    async def render_report(
+        self,
+        report_name: str,
+        record_ids: list[int],
+    ) -> dict[str, Any]:
+        """Render a PDF report via the HTTP /report/pdf/ web controller.
+
+        This endpoint works across all Odoo versions (14-19+), unlike
+        /xmlrpc/2/report which was removed in Odoo 15.
+
+        Falls back to XML-RPC render_report for truly old instances.
+        """
+        await self.ensure_healthy()
+
+        # Try HTTP /report/pdf/ endpoint first (works on all versions)
+        ids_str = ",".join(str(i) for i in record_ids)
+        report_url = f"/report/pdf/{report_name}/{ids_str}"
+
+        try:
+            client = await self._get_report_http_client()
+            response = await client.get(report_url)
+
+            if (
+                response.status_code == 200
+                and "pdf" in response.headers.get("content-type", "").lower()
+            ):
+                pdf_b64 = base64.b64encode(response.content).decode("ascii")
+                self._last_activity = time.monotonic()
+                return {"result": pdf_b64, "format": "pdf"}
+
+            logger.warning(
+                "HTTP report download returned status %d (content-type: %s), "
+                "falling back to XML-RPC",
+                response.status_code,
+                response.headers.get("content-type", "unknown"),
+            )
+        except ConnectionError:
+            raise
+        except Exception as e:
+            logger.warning(
+                "HTTP report download failed: %s, falling back to XML-RPC", e
+            )
+
+        # Fallback: XML-RPC /xmlrpc/2/report (only works on Odoo 14;
+        # the 'report' service was removed in Odoo 15+).
+        if self._odoo_version and self._odoo_version.major <= 14:
+            if self._protocol and isinstance(self._protocol, XmlRpcAdapter):
+                result = await self._protocol.render_report(report_name, record_ids)
+                self._last_activity = time.monotonic()
+                return result
+
+            fallback = await self._get_or_create_xmlrpc_fallback()
+            result = await fallback.render_report(report_name, record_ids)
+            self._last_activity = time.monotonic()
+            return result
+
+        # Fallback for Odoo 15+: try session-authenticated HTTP client.
+        # This handles the case where Bearer auth isn't available (e.g. no API key).
+        last_error = ""
+        try:
+            client = await self._get_session_http_client()
+            response = await client.get(report_url)
+
+            if (
+                response.status_code == 200
+                and "pdf" in response.headers.get("content-type", "").lower()
+            ):
+                pdf_b64 = base64.b64encode(response.content).decode("ascii")
+                self._last_activity = time.monotonic()
+                return {"result": pdf_b64, "format": "pdf"}
+
+            last_error = (
+                f"status {response.status_code} "
+                f"(content-type: {response.headers.get('content-type', 'unknown')})"
+            )
+        except Exception as e:
+            last_error = str(e)
+            logger.warning("Session-auth report fallback also failed: %s", e)
+
+        raise ConnectionError(
+            f"Report generation failed for '{report_name}': {last_error}. "
+            f"Ensure the report exists and you have access."
+        )
 
     # --- Connection info (REQ-02-33) ---
 
@@ -387,6 +702,21 @@ class ConnectionManager:
 
     async def disconnect(self) -> None:
         """Close the connection cleanly."""
+        # Close report HTTP client if we created it (not when reusing adapter client)
+        if self._report_http_client and self._owns_report_client:
+            try:
+                await self._report_http_client.aclose()
+            except Exception:
+                pass
+        self._report_http_client = None
+        self._owns_report_client = False
+        if self._xmlrpc_fallback:
+            try:
+                await self._xmlrpc_fallback.close()
+            except Exception:
+                pass
+            self._xmlrpc_fallback = None
+        self._fallback_methods.clear()
         if self._protocol:
             try:
                 await self._protocol.close()
