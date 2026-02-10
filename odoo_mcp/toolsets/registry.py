@@ -252,7 +252,7 @@ class ToolsetRegistry:
             logger.warning("Could not fetch installed modules — skipping module checks")
             return set()
 
-    def _get_odoo_version(self) -> int | None:
+    def _get_odoo_version(self) -> Any:
         try:
             return getattr(self._connection, "odoo_version", None)
         except Exception:
@@ -266,13 +266,14 @@ class ToolsetRegistry:
             return f"Module(s) not installed: {', '.join(missing)}"
         return None
 
-    def _check_version(self, meta: ToolsetMetadata, odoo_version: int | None) -> str | None:
+    def _check_version(self, meta: ToolsetMetadata, odoo_version: Any) -> str | None:
         if odoo_version is None:
             return None
-        if meta.min_odoo_version is not None and odoo_version < meta.min_odoo_version:
-            return f"Requires Odoo >= {meta.min_odoo_version}, got {odoo_version}"
-        if meta.max_odoo_version is not None and odoo_version > meta.max_odoo_version:
-            return f"Requires Odoo <= {meta.max_odoo_version}, got {odoo_version}"
+        major = odoo_version.major if hasattr(odoo_version, "major") else int(odoo_version)
+        if meta.min_odoo_version is not None and major < meta.min_odoo_version:
+            return f"Requires Odoo >= {meta.min_odoo_version}, got {major}"
+        if meta.max_odoo_version is not None and major > meta.max_odoo_version:
+            return f"Requires Odoo <= {meta.max_odoo_version}, got {major}"
         return None
 
     def _check_dependencies(self, meta: ToolsetMetadata) -> str | None:

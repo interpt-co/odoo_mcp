@@ -362,7 +362,7 @@ class ConnectionManager:
             raise ConnectionError("Not connected")
         await self.ensure_healthy()
         result = await self._protocol.search_read(
-            model, domain, fields, limit, offset, order
+            model, domain, fields=fields, limit=limit, offset=offset, order=order
         )
         self._last_activity = time.monotonic()
         return result
