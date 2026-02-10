@@ -46,7 +46,7 @@ class TestCrmToolsetRegistration:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_crm_create_lead",
             "odoo_crm_move_stage",
@@ -59,7 +59,7 @@ class TestCreateLead:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=1)
         conn.search_read = AsyncMock(return_value=[{
@@ -80,7 +80,7 @@ class TestCreateLead:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_crm_create_lead"]()
@@ -91,7 +91,7 @@ class TestCreateLead:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         call_idx = 0
 
@@ -128,7 +128,7 @@ class TestMoveStage:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=None)
         conn.search_read = AsyncMock(return_value=[{
@@ -145,7 +145,7 @@ class TestMoveStage:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_crm_move_stage"]()
@@ -158,7 +158,7 @@ class TestConvertToOpportunity:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_crm_convert_to_opportunity"]()
@@ -169,7 +169,7 @@ class TestConvertToOpportunity:
         ts = CrmToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(side_effect=[
             {},    # default_get

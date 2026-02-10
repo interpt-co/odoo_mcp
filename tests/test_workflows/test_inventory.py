@@ -46,7 +46,7 @@ class TestInventoryToolsetRegistration:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_inventory_get_stock",
             "odoo_inventory_validate_picking",
@@ -59,7 +59,7 @@ class TestGetStock:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=[(5, "Widget A")])  # name_search
         conn.search_read = AsyncMock(side_effect=[
@@ -92,7 +92,7 @@ class TestGetStock:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(side_effect=[
             [{"display_name": "Widget A"}],
@@ -115,7 +115,7 @@ class TestValidatePicking:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "WH/OUT/00001", "state": "assigned"}
@@ -132,7 +132,7 @@ class TestValidatePicking:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[])
 
@@ -147,7 +147,7 @@ class TestCreateTransfer:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_inventory_create_transfer"]()
@@ -159,7 +159,7 @@ class TestCreateTransfer:
         ts = InventoryToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         call_idx = 0
 

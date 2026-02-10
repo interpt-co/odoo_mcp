@@ -46,7 +46,7 @@ class TestChatterToolsetRegistration:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_chatter_get_messages",
             "odoo_chatter_post_message",
@@ -60,7 +60,7 @@ class TestGetMessages:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {
@@ -89,7 +89,7 @@ class TestGetMessages:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {
@@ -115,7 +115,7 @@ class TestGetMessages:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_chatter_get_messages"]()
@@ -126,7 +126,7 @@ class TestGetMessages:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[])
 
@@ -145,7 +145,7 @@ class TestPostMessage:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=101)
 
@@ -165,7 +165,7 @@ class TestPostMessage:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_chatter_post_message"](
@@ -180,7 +180,7 @@ class TestGetActivities:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {
@@ -208,7 +208,7 @@ class TestScheduleActivity:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         call_idx = 0
 
@@ -243,7 +243,7 @@ class TestScheduleActivity:
         ts = ChatterToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_chatter_schedule_activity"](

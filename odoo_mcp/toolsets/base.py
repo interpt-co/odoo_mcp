@@ -60,7 +60,7 @@ class BaseToolset(ABC):
         ...
 
     @abstractmethod
-    def register_tools(self, server: Any, connection: ConnectionManager, **kwargs: Any) -> list[str]:
+    async def register_tools(self, server: Any, connection: ConnectionManager, **kwargs: Any) -> list[str]:
         """Register this toolset's tools with the MCP server.
 
         Returns a list of the tool names that were registered (REQ-03-03).

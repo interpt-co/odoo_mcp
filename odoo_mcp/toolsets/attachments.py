@@ -8,6 +8,8 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
+from pathlib import Path
 from typing import Any
 
 from odoo_mcp.connection.manager import ConnectionManager
@@ -42,8 +44,8 @@ class AttachmentsToolset(BaseToolset):
             depends_on=["core"],
         )
 
-    def register_tools(
-        self, server: Any, connection: ConnectionManager
+    async def register_tools(
+        self, server: Any, connection: ConnectionManager, **kwargs: Any
     ) -> list[str]:
 
         @server.tool()
@@ -93,13 +95,32 @@ class AttachmentsToolset(BaseToolset):
         async def odoo_attachments_get_content(
             attachment_id: int = 0,
             as_text: bool = False,
+            save_path: str = "",
         ) -> dict[str, Any]:
             """Download attachment content (REQ-09-14 to REQ-09-16).
+
+            RECOMMENDED: For binary files (PDFs, ZIPs, images, etc.), always use
+            save_path to write the file directly to disk. This avoids base64 data
+            being passed through the conversation context, which can cause
+            truncation and corruption. The file will be decoded and saved as a
+            ready-to-use file at the given path.
+
+            Parameters:
+                attachment_id: The ID of the ir.attachment record.
+                as_text: If True, decode text MIME types and return content as
+                    a string (only works for text/plain, text/csv, etc.).
+                save_path: Absolute filesystem path to save the file to (e.g.
+                    "/tmp/report.pdf"). When provided, the binary content is
+                    decoded from base64 and written directly to this path.
+                    The response will contain the saved path instead of the
+                    raw base64 data. Parent directories are created
+                    automatically. This is the preferred method for any
+                    non-text attachment.
 
             Safety limits (REQ-09-15):
             - Max size: 12 MB. Oversized: returns metadata only + warning.
             - Text decoding only for text MIME types.
-            - Binary content returned as base64.
+            - Binary content returned as base64 (unless save_path is used).
             """
             if not attachment_id:
                 return {"status": "error", "message": "attachment_id is required."}
@@ -115,14 +136,15 @@ class AttachmentsToolset(BaseToolset):
 
             att = attachments[0]
             file_size = att.get("file_size", 0)
-            mimetype = att.get("mimetype", "")
+            mimetype_val = att.get("mimetype", "")
+            att_name = att.get("name", "")
 
             # Size limit check (REQ-09-15)
             if file_size > MAX_ATTACHMENT_SIZE_BYTES:
                 return {
                     "id": attachment_id,
-                    "name": att.get("name", ""),
-                    "mimetype": mimetype,
+                    "name": att_name,
+                    "mimetype": mimetype_val,
                     "file_size": file_size,
                     "file_size_human": format_size_human(file_size),
                     "warning": (
@@ -141,15 +163,45 @@ class AttachmentsToolset(BaseToolset):
             )
             raw_b64 = (att_data[0].get("datas", "") or "") if att_data else ""
 
+            # Save to file path — decode base64 and write directly to disk
+            if save_path:
+                if not raw_b64:
+                    return {
+                        "status": "error",
+                        "message": f"Attachment {attachment_id} has no content to save.",
+                    }
+                try:
+                    save_dest = Path(save_path)
+                    save_dest.parent.mkdir(parents=True, exist_ok=True)
+                    content_bytes = base64.b64decode(raw_b64)
+                    save_dest.write_bytes(content_bytes)
+                    return {
+                        "id": attachment_id,
+                        "name": att_name,
+                        "mimetype": mimetype_val,
+                        "file_size": file_size,
+                        "file_size_human": format_size_human(file_size),
+                        "saved_to": str(save_dest.resolve()),
+                        "message": (
+                            f"File '{att_name}' saved to {save_dest.resolve()} "
+                            f"({format_size_human(file_size)})."
+                        ),
+                    }
+                except Exception as exc:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to save file to '{save_path}': {exc}",
+                    }
+
             # Text decoding (REQ-09-15, REQ-09-16)
-            if as_text and mimetype in TEXT_MIME_TYPES and raw_b64:
+            if as_text and mimetype_val in TEXT_MIME_TYPES and raw_b64:
                 try:
                     content_bytes = base64.b64decode(raw_b64)
                     content_text = content_bytes.decode("utf-8")
                     return {
                         "id": attachment_id,
-                        "name": att.get("name", ""),
-                        "mimetype": mimetype,
+                        "name": att_name,
+                        "mimetype": mimetype_val,
                         "file_size": file_size,
                         "content": content_text,
                         "encoding": "text",
@@ -160,8 +212,8 @@ class AttachmentsToolset(BaseToolset):
             # Binary response (REQ-09-16)
             return {
                 "id": attachment_id,
-                "name": att.get("name", ""),
-                "mimetype": mimetype,
+                "name": att_name,
+                "mimetype": mimetype_val,
                 "file_size": file_size,
                 "content_base64": raw_b64,
                 "encoding": "base64",

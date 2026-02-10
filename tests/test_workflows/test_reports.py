@@ -47,7 +47,7 @@ class TestReportsToolsetRegistration:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_reports_generate",
             "odoo_reports_list",
@@ -59,7 +59,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"]()
@@ -70,7 +70,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"](report_name="sale.report_saleorder")
@@ -81,7 +81,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_generate"](
@@ -96,7 +96,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection(odoo_version=17)
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         pdf_bytes = b"%PDF-1.4 test content"
         conn.execute_kw = AsyncMock(return_value=(pdf_bytes, "pdf"))
@@ -116,7 +116,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection(odoo_version=15)
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         pdf_bytes = b"%PDF-1.4 test"
         conn.execute_kw = AsyncMock(return_value=(pdf_bytes, "pdf"))
@@ -136,7 +136,7 @@ class TestReportsGenerate:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(side_effect=Exception("Report not found"))
 
@@ -154,7 +154,7 @@ class TestReportsList:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_reports_list"]()
@@ -165,7 +165,7 @@ class TestReportsList:
         ts = ReportsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {

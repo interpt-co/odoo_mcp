@@ -51,7 +51,7 @@ class TestAttachmentsToolsetRegistration:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_attachments_list",
             "odoo_attachments_get_content",
@@ -65,7 +65,7 @@ class TestAttachmentsList:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {
@@ -91,7 +91,7 @@ class TestAttachmentsList:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_attachments_list"]()
@@ -104,7 +104,7 @@ class TestAttachmentsGetContent:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         text_content = base64.b64encode(b"id,name\n1,test").decode("ascii")
         conn.search_read = AsyncMock(side_effect=[
@@ -126,7 +126,7 @@ class TestAttachmentsGetContent:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         b64_content = base64.b64encode(b"\x89PNG\r\n").decode("ascii")
         conn.search_read = AsyncMock(side_effect=[
@@ -144,7 +144,7 @@ class TestAttachmentsGetContent:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {
@@ -164,7 +164,7 @@ class TestAttachmentsGetContent:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[])
 
@@ -179,7 +179,7 @@ class TestAttachmentsUpload:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=10)
 
@@ -198,7 +198,7 @@ class TestAttachmentsUpload:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=11)
 
@@ -217,7 +217,7 @@ class TestAttachmentsUpload:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_attachments_upload"](
@@ -232,7 +232,7 @@ class TestAttachmentsDelete:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[{"name": "old.pdf"}])
         conn.execute_kw = AsyncMock(return_value=None)
@@ -247,7 +247,7 @@ class TestAttachmentsDelete:
         ts = AttachmentsToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[])
 
@@ -255,6 +255,118 @@ class TestAttachmentsDelete:
             registered["odoo_attachments_delete"](attachment_id=999)
         )
         assert result["status"] == "error"
+
+
+class TestAttachmentsGetContentSavePath:
+    def test_save_path_writes_file(self, tmp_path):
+        ts = AttachmentsToolset()
+        server, registered = _make_server()
+        conn = _make_connection()
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
+
+        zip_bytes = b"PK\x03\x04fake-zip-content-here"
+        b64_content = base64.b64encode(zip_bytes).decode("ascii")
+        conn.search_read = AsyncMock(side_effect=[
+            [{"name": "project.zip", "mimetype": "application/zip", "file_size": len(zip_bytes)}],
+            [{"datas": b64_content}],
+        ])
+
+        dest = tmp_path / "downloads" / "project.zip"
+        result = asyncio.get_event_loop().run_until_complete(
+            registered["odoo_attachments_get_content"](
+                attachment_id=1, save_path=str(dest)
+            )
+        )
+        assert dest.exists()
+        assert dest.read_bytes() == zip_bytes
+        assert result["saved_to"] == str(dest.resolve())
+        assert "project.zip" in result["message"]
+        assert "content_base64" not in result
+        assert "encoding" not in result
+
+    def test_save_path_creates_parent_dirs(self, tmp_path):
+        ts = AttachmentsToolset()
+        server, registered = _make_server()
+        conn = _make_connection()
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
+
+        content = b"hello"
+        b64_content = base64.b64encode(content).decode("ascii")
+        conn.search_read = AsyncMock(side_effect=[
+            [{"name": "data.bin", "mimetype": "application/octet-stream", "file_size": len(content)}],
+            [{"datas": b64_content}],
+        ])
+
+        dest = tmp_path / "a" / "b" / "c" / "data.bin"
+        result = asyncio.get_event_loop().run_until_complete(
+            registered["odoo_attachments_get_content"](
+                attachment_id=1, save_path=str(dest)
+            )
+        )
+        assert dest.exists()
+        assert dest.read_bytes() == content
+
+    def test_save_path_empty_content_returns_error(self):
+        ts = AttachmentsToolset()
+        server, registered = _make_server()
+        conn = _make_connection()
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
+
+        conn.search_read = AsyncMock(side_effect=[
+            [{"name": "empty.bin", "mimetype": "application/octet-stream", "file_size": 0}],
+            [{"datas": ""}],
+        ])
+
+        result = asyncio.get_event_loop().run_until_complete(
+            registered["odoo_attachments_get_content"](
+                attachment_id=1, save_path="/tmp/empty.bin"
+            )
+        )
+        assert result["status"] == "error"
+        assert "no content" in result["message"].lower()
+
+    def test_save_path_invalid_path_returns_error(self, tmp_path):
+        ts = AttachmentsToolset()
+        server, registered = _make_server()
+        conn = _make_connection()
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
+
+        b64_content = base64.b64encode(b"data").decode("ascii")
+        conn.search_read = AsyncMock(side_effect=[
+            [{"name": "file.bin", "mimetype": "application/octet-stream", "file_size": 4}],
+            [{"datas": b64_content}],
+        ])
+
+        # Use /dev/null/impossible as an invalid path
+        result = asyncio.get_event_loop().run_until_complete(
+            registered["odoo_attachments_get_content"](
+                attachment_id=1, save_path="/dev/null/impossible/file.bin"
+            )
+        )
+        assert result["status"] == "error"
+        assert "failed to save" in result["message"].lower()
+
+    def test_save_path_skipped_for_oversized(self):
+        ts = AttachmentsToolset()
+        server, registered = _make_server()
+        conn = _make_connection()
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
+
+        conn.search_read = AsyncMock(return_value=[
+            {
+                "name": "huge.bin",
+                "mimetype": "application/octet-stream",
+                "file_size": MAX_ATTACHMENT_SIZE_BYTES + 1,
+            }
+        ])
+
+        result = asyncio.get_event_loop().run_until_complete(
+            registered["odoo_attachments_get_content"](
+                attachment_id=1, save_path="/tmp/huge.bin"
+            )
+        )
+        assert "warning" in result
+        assert result["encoding"] is None
 
 
 class TestTextMimeTypes:

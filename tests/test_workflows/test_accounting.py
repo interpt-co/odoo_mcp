@@ -46,7 +46,7 @@ class TestAccountingToolsetRegistration:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_accounting_create_invoice",
             "odoo_accounting_post_invoice",
@@ -59,7 +59,7 @@ class TestCreateInvoice:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=1)
         conn.search_read = AsyncMock(return_value=[{
@@ -83,7 +83,7 @@ class TestCreateInvoice:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         call_count = 0
         async def mock_execute(model, method, args=None, **kwargs):
@@ -120,7 +120,7 @@ class TestPostInvoice:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "INV/2025/0001", "state": "draft"}
@@ -136,7 +136,7 @@ class TestPostInvoice:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "INV/2025/0001", "state": "posted"}
@@ -152,7 +152,7 @@ class TestPostInvoice:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "INV/2025/0001", "state": "draft"}
@@ -171,7 +171,7 @@ class TestRegisterPayment:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         result = asyncio.get_event_loop().run_until_complete(
             registered["odoo_accounting_register_payment"]()
@@ -182,7 +182,7 @@ class TestRegisterPayment:
         ts = AccountingToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(side_effect=[
             {},    # default_get

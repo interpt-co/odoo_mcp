@@ -41,8 +41,8 @@ class InventoryToolset(BaseToolset):
             depends_on=["core"],
         )
 
-    def register_tools(
-        self, server: Any, connection: ConnectionManager
+    async def register_tools(
+        self, server: Any, connection: ConnectionManager, **kwargs: Any
     ) -> list[str]:
 
         @server.tool()

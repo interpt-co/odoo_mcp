@@ -47,7 +47,7 @@ class TestSalesToolsetRegistration:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        names = ts.register_tools(server, conn)
+        names = asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
         assert set(names) == {
             "odoo_sales_create_order",
             "odoo_sales_confirm_order",
@@ -62,7 +62,7 @@ class TestCreateOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.execute_kw = AsyncMock(return_value=1)  # create returns ID
         conn.search_read = AsyncMock(side_effect=[
@@ -81,7 +81,7 @@ class TestCreateOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         # name_search returns multiple matches
         conn.execute_kw = AsyncMock(return_value=[
@@ -98,7 +98,7 @@ class TestCreateOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         call_count = 0
 
@@ -125,7 +125,7 @@ class TestConfirmOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         # resolve_order returns single match
         conn.execute_kw = AsyncMock(return_value=[(42, "SO042")])
@@ -144,7 +144,7 @@ class TestConfirmOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "SO042", "state": "sale"}
@@ -162,7 +162,7 @@ class TestCancelOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "SO042", "state": "draft"}
@@ -178,7 +178,7 @@ class TestCancelOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[
             {"name": "SO042", "state": "sale"}
@@ -197,7 +197,7 @@ class TestGetOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(side_effect=[
             # Order read
@@ -237,7 +237,7 @@ class TestGetOrder:
         ts = SalesToolset()
         server, registered = _make_server()
         conn = _make_connection()
-        ts.register_tools(server, conn)
+        asyncio.get_event_loop().run_until_complete(ts.register_tools(server, conn))
 
         conn.search_read = AsyncMock(return_value=[])
 
