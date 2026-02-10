@@ -97,6 +97,42 @@ Multiple conditions without operators are joined with AND:
 | UNLINK ALL | `(5, 0, 0)` | Remove all (Many2many only) |
 | REPLACE | `(6, 0, [ids])` | Replace all with given IDs |
 
+## Partner/Contact Hierarchy — IMPORTANT
+
+Odoo contacts are hierarchical: a **company** (is_company=True) can have multiple
+**child contacts** (employees, addresses). When searching for records related to a
+partner (e.g., sales orders, invoices), you MUST account for the full hierarchy:
+
+- **`child_of` operator**: `('partner_id', 'child_of', company_id)` finds records for
+  the company AND all its child contacts. Always prefer this over `=` when searching
+  by partner.
+- **When you have a contact (not a company)**: first find its `parent_id` (the company),
+  then use `child_of` on the parent to get records for the entire organization.
+- **When searching by name**: search `res.partner` first, check if the result has
+  `parent_id` or `child_ids`, then use `child_of` on the company ID.
+
+### Partner search workflow
+1. Find the partner: `[('name', 'ilike', 'ACME')]` on `res.partner`
+2. Check if it's a company or contact (look at `is_company` and `parent_id`)
+3. Get the company ID (either the partner itself if is_company, or its parent_id)
+4. Search records with: `[('partner_id', 'child_of', company_id)]`
+
+### Examples
+```python
+# WRONG — misses orders placed under child contacts:
+[('partner_id', '=', 25)]
+
+# RIGHT — includes company + all child contacts:
+[('partner_id', 'child_of', 25)]
+
+# Find invoices for a contact's entire organization:
+# 1. Read partner 24: has parent_id=25
+# 2. Search: [('partner_id', 'child_of', 25)]
+```
+
+**Rule: When searching records by partner, ALWAYS use `child_of` instead of `=`
+unless you specifically need only that exact contact's records.**
+
 ## Common Patterns
 ```python
 # All records: []
@@ -107,6 +143,7 @@ Multiple conditions without operators are joined with AND:
 # Starts with: [('name', '=ilike', 'SO%')]
 # Date range: [('date', '>=', '2025-02-01'), ('date', '<=', '2025-02-28')]
 # Relational: [('partner_id.country_id.code', '=', 'PT')]
+# Partner hierarchy: [('partner_id', 'child_of', 42)]  # company + all contacts
 # Has a tag: [('tag_ids', 'in', [5])]
 # Not cancelled: [('state', '!=', 'cancel')]
 ```
@@ -242,7 +279,17 @@ To get started:
 - Use odoo_core_search_read to search for records
 - Use odoo_core_fields_get to understand a model's structure
 - Use workflow tools (e.g., odoo_sales_create_order) for business operations
-- Use odoo_core_list_models to discover available models"""
+- Use odoo_core_list_models to discover available models
+- Use odoo_core_deep_search for natural language searches — it automatically expands partner hierarchies
+
+IMPORTANT — Partner/Contact Search Best Practices:
+Odoo contacts are hierarchical (company → child contacts). When searching for records
+related to a partner (orders, invoices, leads, etc.), ALWAYS use the 'child_of' operator
+instead of '=' to include the company AND all its child contacts:
+  CORRECT: [['partner_id', 'child_of', company_id]]
+  WRONG:   [['partner_id', '=', partner_id]]
+If you have a contact (not a company), first find its parent_id, then use child_of on the parent.
+This ensures you never miss records that belong to related contacts in the same organization."""
 
         return [{"role": "user", "content": {"type": "text", "text": text}}]
 
@@ -442,10 +489,31 @@ To get started:
             for val, label in state_field.selection:
                 sections.append(f"- `{val}`: {label}")
 
+        # Partner hierarchy warning
+        partner_field = model.fields.get("partner_id")
+        if partner_field:
+            sections.append("\n## Partner Search — IMPORTANT")
+            sections.append(
+                "This model has a `partner_id` field. When searching by partner, "
+                "ALWAYS use the `child_of` operator to include the company and all "
+                "its child contacts:\n"
+                "```\n"
+                "[('partner_id', 'child_of', company_id)]\n"
+                "```\n"
+                "If searching by partner name, first find the partner in `res.partner`, "
+                "check if it has a `parent_id` (meaning it's a child contact), and use "
+                "`child_of` on the company (parent) ID."
+            )
+
         # Suggest a domain based on the query
         sections.append("\n## Suggested Approach")
         sections.append(f"Based on your query \"{query}\", consider:")
         sections.append(f'- Text search: `[(\'name\', \'ilike\', \'{query}\')]`')
+        if partner_field:
+            sections.append(
+                f"- Partner search: First find the partner in res.partner, then use "
+                f"`[('partner_id', 'child_of', company_id)]` to include all related contacts"
+            )
         if state_field:
             sections.append(f"- State filter: `[('state', '=', '<state_value>')]`")
 

@@ -37,7 +37,7 @@ SEARCH_CONFIGS: dict[str, ModelSearchConfig] = {
         name_field="name",
         search_fields=["name", "display_name"],
         deep_search_fields=["email", "phone", "mobile", "vat", "ref", "website", "comment", "street", "city"],
-        default_fields=["id", "name", "email", "phone", "is_company", "city", "country_id"],
+        default_fields=["id", "name", "email", "phone", "is_company", "parent_id", "child_ids", "city", "country_id"],
         has_chatter=True,
         related_models=["sale.order", "account.move", "crm.lead", "helpdesk.ticket"],
     ),
@@ -295,7 +295,11 @@ class ProgressiveSearch:
         self, model: str, cfg: ModelSearchConfig, query: str,
         fields: list[str], limit: int,
     ) -> list[dict]:
-        """Level 4 — Related model search (REQ-08-10)."""
+        """Level 4 — Related model search (REQ-08-10).
+
+        For res.partner related models, uses Odoo's native 'child_of' operator
+        to efficiently search the full partner hierarchy (company + all contacts).
+        """
         if not cfg.related_models:
             return []
 
@@ -318,23 +322,57 @@ class ProgressiveSearch:
             if not related_results:
                 continue
 
-            # Extract IDs and expand (company→contacts, individual→parent+siblings)
-            related_ids = [r["id"] for r in related_results]
-            expanded_ids = await self._expand_partner_ids(
-                related_model, related_results, related_ids,
-            )
-
-            if not expanded_ids:
-                continue
-
             # Determine the link field (e.g. partner_id for res.partner)
             link_field = self._guess_link_field(model, related_model)
             if not link_field:
                 continue
 
-            search_domain = [(link_field, "in", expanded_ids)]
-            records = await self._do_search(model, search_domain, fields, limit)
-            all_records.extend(records)
+            if related_model == "res.partner":
+                # Use child_of for efficient hierarchy search
+                # For each found partner, resolve the company (root) ID
+                company_ids: set[int] = set()
+                for r in related_results:
+                    rid = r.get("id")
+                    is_company = r.get("is_company", False)
+                    parent_id = r.get("parent_id")
+
+                    if is_company:
+                        company_ids.add(rid)
+                    else:
+                        # Get parent (company) ID
+                        pid = None
+                        if isinstance(parent_id, dict):
+                            pid = parent_id.get("id")
+                        elif isinstance(parent_id, (list, tuple)) and parent_id:
+                            pid = parent_id[0]
+                        elif isinstance(parent_id, int):
+                            pid = parent_id
+
+                        if pid:
+                            company_ids.add(pid)
+                        else:
+                            # No parent — treat as standalone, still use child_of
+                            company_ids.add(rid)
+
+                # Search using child_of for each company (covers company + all children)
+                for cid in company_ids:
+                    search_domain = [(link_field, "child_of", cid)]
+                    records = await self._do_search(model, search_domain, fields, limit)
+                    all_records.extend(records)
+
+                # Also search with the exact IDs found (fallback for edge cases)
+                related_ids = [r["id"] for r in related_results]
+                remaining_ids = [rid for rid in related_ids if rid not in company_ids]
+                if remaining_ids:
+                    search_domain = [(link_field, "in", remaining_ids)]
+                    records = await self._do_search(model, search_domain, fields, limit)
+                    all_records.extend(records)
+            else:
+                # Non-partner related models: use direct ID matching
+                related_ids = [r["id"] for r in related_results]
+                search_domain = [(link_field, "in", related_ids)]
+                records = await self._do_search(model, search_domain, fields, limit)
+                all_records.extend(records)
 
         return all_records
 
@@ -489,6 +527,11 @@ class ProgressiveSearch:
             suggestions.append(
                 "Use odoo_core_search_read with an ilike domain to search specific fields."
             )
+            suggestions.append(
+                "If searching for records related to a contact/company, first find the partner "
+                "in res.partner, then use [['partner_id', 'child_of', company_id]] to include "
+                "the company and ALL its child contacts."
+            )
             return suggestions
 
         # Summarise what was found
@@ -496,19 +539,50 @@ class ProgressiveSearch:
         if "res.partner" in results:
             partners = results["res.partner"]
             if partners:
-                pid = partners[0].get("id")
-                pname = partners[0].get("name", query)
+                p = partners[0]
+                pid = p.get("id")
+                pname = p.get("name", query)
+                is_company = p.get("is_company", False)
+                parent_id = p.get("parent_id")
+
                 suggestions.append(
-                    f"Found partner '{pname}'."
+                    f"Found partner '{pname}' (id={pid})."
                 )
-                suggestions.append(
-                    f"Use odoo_core_search_read with domain [['partner_id', '=', {pid}]] "
-                    "to find more related records."
-                )
+
+                # Provide child_of guidance based on partner type
+                if is_company:
+                    suggestions.append(
+                        f"'{pname}' is a company. Use [['partner_id', 'child_of', {pid}]] "
+                        f"to find records for this company AND all its child contacts."
+                    )
+                elif parent_id:
+                    parent_pid = (
+                        parent_id.get("id") if isinstance(parent_id, dict)
+                        else parent_id[0] if isinstance(parent_id, (list, tuple))
+                        else parent_id if isinstance(parent_id, int)
+                        else None
+                    )
+                    if parent_pid:
+                        suggestions.append(
+                            f"'{pname}' is a contact under company id={parent_pid}. "
+                            f"Use [['partner_id', 'child_of', {parent_pid}]] to find "
+                            f"records for the entire organization (company + all contacts)."
+                        )
+                    else:
+                        suggestions.append(
+                            f"Use [['partner_id', 'child_of', {pid}]] "
+                            "to find records for this partner and all related contacts."
+                        )
+                else:
+                    suggestions.append(
+                        f"Use [['partner_id', 'child_of', {pid}]] "
+                        "to find records for this partner and all related contacts."
+                    )
 
         if "related_models" in strategies_used:
             suggestions.append(
-                "Results include records found via related model expansion."
+                "Results include records found via related model expansion "
+                "(parent company, child contacts, and sibling contacts were all searched)."
             )
 
         if "chatter_search" in strategies_used:

@@ -502,6 +502,7 @@ class ConnectionManager:
                 base_url=url,
                 timeout=timeout,
                 verify=verify,
+                follow_redirects=True,
                 headers={"Authorization": f"Bearer {self._config.odoo_api_key}"},
             )
             self._report_http_client = client
@@ -513,21 +514,36 @@ class ConnectionManager:
         # the JsonRpcAdapter sets Content-Type as a default header, and Odoo
         # routes requests with that Content-Type through the JSON-RPC
         # dispatcher — which rejects the http-type /report/pdf/ route.
+        # Use the session obtained during the initial auth flow (API key
+        # is accepted as password by /web/session/authenticate).
         if isinstance(self._protocol, JsonRpcAdapter):
-            session_id = self._protocol._client.cookies.get("session_id")
+            # Access _session_id directly — more reliable than cookie
+            # extraction which can fail due to domain/path filtering.
+            session_id = (
+                self._protocol._session_id
+                or self._protocol._client.cookies.get("session_id")
+            )
             if session_id:
+                logger.debug(
+                    "Creating report HTTP client with session cookie from initial auth"
+                )
                 client = httpx.AsyncClient(
                     base_url=url,
                     timeout=timeout,
                     verify=verify,
+                    follow_redirects=True,
                 )
                 client.cookies.set("session_id", session_id)
                 self._report_http_client = client
                 self._owns_report_client = True
                 return self._report_http_client
-            # No session cookie; fall through to session-auth client creation
+            logger.warning(
+                "JsonRpcAdapter has no session_id; falling through to "
+                "session-auth client creation"
+            )
 
-        # For XmlRpcAdapter: create a session-authenticated httpx client
+        # For XmlRpcAdapter (or JsonRpcAdapter without session cookie):
+        # create a session-authenticated httpx client.
         client = await self._create_session_http_client()
         self._report_http_client = client
         self._owns_report_client = True
@@ -544,6 +560,7 @@ class ConnectionManager:
             base_url=url,
             timeout=timeout,
             verify=verify,
+            follow_redirects=True,
         )
 
         db = self._config.odoo_db
@@ -565,14 +582,41 @@ class ConnectionManager:
                 },
             )
             data = response.json()
+
+            # Check for JSON-RPC error (e.g. invalid credentials, db not found)
+            if "error" in data:
+                error_msg = data["error"].get("message", "Unknown error")
+                error_data = data["error"].get("data", {})
+                detail = error_data.get("message", "") if isinstance(error_data, dict) else ""
+                raise ConnectionError(
+                    f"Report HTTP client: session auth error: {error_msg}"
+                    + (f" ({detail})" if detail else "")
+                )
+
             result = data.get("result", {})
             if not result.get("uid"):
+                # Include diagnostic info so we can debug SaaS auth issues
+                logger.warning(
+                    "Report session auth: uid=%r, status=%d, "
+                    "has_session_cookie=%s, response_keys=%s",
+                    result.get("uid"),
+                    response.status_code,
+                    "session_id" in response.cookies,
+                    list(data.keys()),
+                )
                 raise ConnectionError(
-                    "Report HTTP client: session authentication failed"
+                    f"Report HTTP client: session auth returned uid={result.get('uid')!r} "
+                    f"(status={response.status_code}, db={db!r}, login={username!r})"
                 )
             session_id = response.cookies.get("session_id")
             if session_id:
                 client.cookies.set("session_id", session_id)
+            else:
+                logger.warning(
+                    "Report session auth succeeded (uid=%s) but no session_id cookie "
+                    "in response; report download may fail",
+                    result.get("uid"),
+                )
         except ConnectionError:
             await client.aclose()
             raise
@@ -584,26 +628,6 @@ class ConnectionManager:
 
         return client
 
-    async def _get_session_http_client(self) -> httpx.AsyncClient:
-        """Create a fresh session-authenticated HTTP client (fallback).
-
-        Used as fallback when the primary report HTTP client doesn't work
-        (e.g. Bearer auth rejected, session expired, Content-Type conflict).
-        Always creates a new session to ensure a clean authentication state.
-        Replaces the existing report client.
-        """
-        # Close existing client if we own it
-        if self._report_http_client and self._owns_report_client:
-            try:
-                await self._report_http_client.aclose()
-            except Exception:
-                pass
-            self._report_http_client = None
-
-        client = await self._create_session_http_client()
-        self._report_http_client = client
-        self._owns_report_client = True
-        return client
 
     async def render_report(
         self,
@@ -623,6 +647,7 @@ class ConnectionManager:
         ids_str = ",".join(str(i) for i in record_ids)
         report_url = f"/report/pdf/{report_name}/{ids_str}"
 
+        first_attempt_detail = ""
         try:
             client = await self._get_report_http_client()
             response = await client.get(report_url)
@@ -635,17 +660,23 @@ class ConnectionManager:
                 self._last_activity = time.monotonic()
                 return {"result": pdf_b64, "format": "pdf"}
 
+            content_type = response.headers.get("content-type", "unknown")
+            # Capture body preview for diagnostics (HTML login page, error, etc.)
+            body_preview = response.text[:300] if response.text else "(empty)"
+            first_attempt_detail = (
+                f"status={response.status_code}, content-type={content_type}, "
+                f"body_preview={body_preview!r}"
+            )
             logger.warning(
-                "HTTP report download returned status %d (content-type: %s), "
-                "falling back to XML-RPC",
-                response.status_code,
-                response.headers.get("content-type", "unknown"),
+                "HTTP report download failed: %s",
+                first_attempt_detail,
             )
         except ConnectionError:
             raise
         except Exception as e:
+            first_attempt_detail = str(e)
             logger.warning(
-                "HTTP report download failed: %s, falling back to XML-RPC", e
+                "HTTP report download exception: %s, falling back", e
             )
 
         # Fallback: XML-RPC /xmlrpc/2/report (only works on Odoo 14;
@@ -661,11 +692,24 @@ class ConnectionManager:
             self._last_activity = time.monotonic()
             return result
 
-        # Fallback for Odoo 15+: try session-authenticated HTTP client.
-        # This handles the case where Bearer auth isn't available (e.g. no API key).
+        # Fallback for Odoo 15+: retry with a fresh session-authenticated
+        # HTTP client.  The initial attempt may have failed because the
+        # cached report client's session expired or used Bearer auth that
+        # the http-type route doesn't accept.  This creates a brand-new
+        # session via /web/session/authenticate (API key as password).
         last_error = ""
         try:
-            client = await self._get_session_http_client()
+            # Invalidate the cached report client so we get a fresh session
+            if self._report_http_client and self._owns_report_client:
+                try:
+                    await self._report_http_client.aclose()
+                except Exception:
+                    pass
+                self._report_http_client = None
+
+            client = await self._create_session_http_client()
+            self._report_http_client = client
+            self._owns_report_client = True
             response = await client.get(report_url)
 
             if (
@@ -686,6 +730,7 @@ class ConnectionManager:
 
         raise ConnectionError(
             f"Report generation failed for '{report_name}': {last_error}. "
+            f"First attempt: {first_attempt_detail or 'no detail'}. "
             f"Ensure the report exists and you have access."
         )
 

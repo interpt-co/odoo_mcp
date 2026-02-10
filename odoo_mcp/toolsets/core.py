@@ -82,7 +82,8 @@ Examples:
   [['name', 'ilike', 'acme']] → records where name contains 'acme' (case-insensitive)
   [['amount', '>=', 1000], ['state', '=', 'posted']] → AND (both conditions)
   ['|', ['state', '=', 'draft'], ['state', '=', 'sent']] → OR (either condition)
-  [['partner_id.country_id.code', '=', 'PT']] → related field traversal\
+  [['partner_id.country_id.code', '=', 'PT']] → related field traversal
+  [['partner_id', 'child_of', 25]] → partner 25 + all child contacts (RECOMMENDED for partner searches)\
 """
 
 
@@ -293,7 +294,12 @@ class CoreToolset(BaseToolset):
             (
                 f"Search records and return field values.\n\n{DOMAIN_SYNTAX_HELP}\n\n"
                 "Binary fields (images, files) are excluded from results by default.\n"
-                "To download file attachments, prefer odoo_attachments_get_content with save_path."
+                "To download file attachments, prefer odoo_attachments_get_content with save_path.\n\n"
+                "IMPORTANT — Partner searches: When filtering by partner_id, use the 'child_of' "
+                "operator instead of '=' to include the company AND all its child contacts. "
+                "Example: [['partner_id', 'child_of', 25]] finds records for partner 25 and "
+                "all contacts under it. If you have a contact (not a company), first find its "
+                "parent_id, then use child_of on the parent."
             ),
             ANNOTATIONS_READ_ONLY,
         )
@@ -310,7 +316,10 @@ class CoreToolset(BaseToolset):
         yield (
             tool_name("core", "count"),
             self._make_count(connection, config),
-            f"Count records matching a domain.\n\n{DOMAIN_SYNTAX_HELP}",
+            (
+                f"Count records matching a domain.\n\n{DOMAIN_SYNTAX_HELP}\n\n"
+                "Tip: When counting by partner_id, use 'child_of' to include all related contacts."
+            ),
             ANNOTATIONS_READ_ONLY,
         )
         yield (
@@ -346,7 +355,13 @@ class CoreToolset(BaseToolset):
         yield (
             tool_name("core", "deep_search"),
             self._make_deep_search(connection, config),
-            "Progressive deep search across Odoo models. Automatically broadens search strategy when initial attempts fail.",
+            (
+                "Progressive deep search across Odoo models. Automatically broadens search strategy when initial attempts fail.\n\n"
+                "Automatically handles partner/contact hierarchy: when searching for records related to a partner, "
+                "expands the search to include parent companies, child contacts, and sibling contacts. "
+                "This is the recommended tool when searching by partner/company name, as it ensures "
+                "no related records are missed."
+            ),
             ANNOTATIONS_READ_ONLY,
         )
 

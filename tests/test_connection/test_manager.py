@@ -701,6 +701,7 @@ class TestRenderReportHttp:
         mock_protocol = MagicMock(spec=JsonRpcAdapter)
         mock_protocol.protocol_name = "jsonrpc"
         mock_protocol._client = mock_httpx_client
+        mock_protocol._session_id = "test-session-123"
         mgr._protocol = mock_protocol
 
         client = await mgr._get_report_http_client()
