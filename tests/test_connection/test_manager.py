@@ -678,8 +678,8 @@ class TestRenderReportHttp:
         assert result["result"] == pdf_b64
 
     @pytest.mark.asyncio
-    async def test_get_report_client_reuses_jsonrpc_client(self):
-        """For JsonRpcAdapter, the adapter's httpx client is reused."""
+    async def test_get_report_client_creates_for_jsonrpc(self):
+        """For JsonRpcAdapter, a new client is created with session cookie but no Content-Type."""
         from odoo_mcp.connection.jsonrpc_adapter import JsonRpcAdapter
 
         config = OdooMcpConfig(
@@ -695,7 +695,9 @@ class TestRenderReportHttp:
         mgr._uid = 2
         mgr._last_activity = time.monotonic()
 
-        mock_httpx_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_httpx_client = MagicMock(spec=httpx.AsyncClient)
+        mock_httpx_client.cookies = httpx.Cookies()
+        mock_httpx_client.cookies.set("session_id", "test-session-123")
         mock_protocol = MagicMock(spec=JsonRpcAdapter)
         mock_protocol.protocol_name = "jsonrpc"
         mock_protocol._client = mock_httpx_client
@@ -703,8 +705,12 @@ class TestRenderReportHttp:
 
         client = await mgr._get_report_http_client()
 
-        assert client is mock_httpx_client
-        assert mgr._owns_report_client is False
+        # Should NOT reuse the adapter's client (which has Content-Type: application/json)
+        assert client is not mock_httpx_client
+        assert mgr._owns_report_client is True
+        # The new client should NOT have Content-Type: application/json
+        assert client.headers.get("Content-Type", "") != "application/json"
+        await client.aclose()
 
     @pytest.mark.asyncio
     async def test_get_report_client_creates_bearer_for_json2(self):
@@ -810,8 +816,8 @@ class TestRenderReportHttp:
         assert mgr._owns_report_client is False
 
     @pytest.mark.asyncio
-    async def test_disconnect_skips_closing_borrowed_client(self):
-        """disconnect() does NOT close a borrowed adapter client."""
+    async def test_disconnect_skips_closing_unowned_client(self):
+        """disconnect() does NOT close a report client it does not own."""
         config = OdooMcpConfig(
             odoo_url="https://test.odoo.com",
             odoo_db="testdb",
@@ -826,7 +832,7 @@ class TestRenderReportHttp:
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mgr._report_http_client = mock_client
-        mgr._owns_report_client = False  # Borrowed from adapter
+        mgr._owns_report_client = False  # Not owned
 
         mock_protocol = AsyncMock()
         mgr._protocol = mock_protocol

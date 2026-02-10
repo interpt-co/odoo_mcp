@@ -508,12 +508,24 @@ class ConnectionManager:
             self._owns_report_client = True
             return self._report_http_client
 
-        # Reuse the adapter's httpx client for JsonRpc (session-authenticated,
-        # no conflicting Content-Type default header)
+        # For JsonRpcAdapter: create a new client with the session cookie
+        # but WITHOUT Content-Type: application/json.  Like Json2Adapter,
+        # the JsonRpcAdapter sets Content-Type as a default header, and Odoo
+        # routes requests with that Content-Type through the JSON-RPC
+        # dispatcher — which rejects the http-type /report/pdf/ route.
         if isinstance(self._protocol, JsonRpcAdapter):
-            self._report_http_client = self._protocol._client
-            self._owns_report_client = False
-            return self._report_http_client
+            session_id = self._protocol._client.cookies.get("session_id")
+            if session_id:
+                client = httpx.AsyncClient(
+                    base_url=url,
+                    timeout=timeout,
+                    verify=verify,
+                )
+                client.cookies.set("session_id", session_id)
+                self._report_http_client = client
+                self._owns_report_client = True
+                return self._report_http_client
+            # No session cookie; fall through to session-auth client creation
 
         # For XmlRpcAdapter: create a session-authenticated httpx client
         client = await self._create_session_http_client()
@@ -573,25 +585,20 @@ class ConnectionManager:
         return client
 
     async def _get_session_http_client(self) -> httpx.AsyncClient:
-        """Get a session-authenticated HTTP client, creating one if needed.
+        """Create a fresh session-authenticated HTTP client (fallback).
 
-        Used as fallback when Bearer auth doesn't work for report downloads.
-        Stores in _report_http_client, replacing any existing client.
+        Used as fallback when the primary report HTTP client doesn't work
+        (e.g. Bearer auth rejected, session expired, Content-Type conflict).
+        Always creates a new session to ensure a clean authentication state.
+        Replaces the existing report client.
         """
-        # If we already have a session-authenticated client cached, return it
-        if (
-            self._report_http_client is not None
-            and self._owns_report_client
-            and not isinstance(self._protocol, Json2Adapter)
-        ):
-            return self._report_http_client
-
-        # Close existing Bearer-auth client if we own it
+        # Close existing client if we own it
         if self._report_http_client and self._owns_report_client:
             try:
                 await self._report_http_client.aclose()
             except Exception:
                 pass
+            self._report_http_client = None
 
         client = await self._create_session_http_client()
         self._report_http_client = client
